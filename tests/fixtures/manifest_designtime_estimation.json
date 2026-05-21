@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "programme_id": "prog-fixture-1",
+  "canvas_id": "canvas-fixture-1",
+  "published_version": 3,
+  "computed_at": "2026-05-04T08:42:11.000Z",
+  "inputs": [
+    {
+      "dataset": "node_loop_throughput_config",
+      "row_count": 3,
+      "hash": "07ee185097f980e13bcf2773bddc56d375f22aeb317a313190984c9f0db06840",
+      "columns": [
+        "canvas_id",
+        "id",
+        "node_id",
+        "yield_pct"
+      ],
+      "period_start": null,
+      "period_end": null
+    }
+  ],
+  "output": {
+    "metrics_hash": "07aa9f0e6289fb3ca175c0a07a74d1b91f24e886688646f14bd5d2561f5d460b",
+    "metrics_source": "designtime_estimation"
+  },
+  "computation": {
+    "transform": {
+      "function_id": "circulr.publish-to-passport.programme-metrics",
+      "function_version": "1.0.0",
+      "function_url": "https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/1.0.0/manifest.json",
+      "description": "Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests."
+    },
+    "emission_factors_hash": "deadbeef",
+    "rounding_rule": "ROUND_HALF_EVEN_4DP",
+    "null_handling": "null_as_zero"
+  },
+  "signature": {
+    "algorithm": "ES256",
+    "public_key_id": "circulr-fixture-2026-05",
+    "public_key_url": "https://fixtures.local/.well-known/verification-keys.json",
+    "value": "3OfmTQndpVojxFhIY30-f188p475R61dpqWxWm_CjI6DbZcbAggpy85X-I8i1qgrxBUkTSIIMMqoUNA7Y3boVw"
+  }
+}

@@ -1,0 +1,7 @@
+src/
+tests/
+.github/
+tsconfig.json
+.eslintrc*
+vitest.config*
+*.test.ts

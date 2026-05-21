@@ -1,0 +1,29 @@
+{
+  "privateJwk": {
+    "key_ops": [
+      "sign"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "fqCZM2RrY3umGuSLIwTutOa_NmRBu8hv0ZSGgRpo7pA",
+    "y": "UzFOUIRYGII3kcePd5BbBMIU5O97VVsW-YDtc0peuCU",
+    "crv": "P-256",
+    "d": "r7Say-rXAQU4r0VSwsIfuuOpmKBU7fuui2x6TyLYbIs",
+    "kid": "circulr-fixture-2026-05"
+  },
+  "publicJwk": {
+    "key_ops": [
+      "verify"
+    ],
+    "ext": true,
+    "kty": "EC",
+    "x": "fqCZM2RrY3umGuSLIwTutOa_NmRBu8hv0ZSGgRpo7pA",
+    "y": "UzFOUIRYGII3kcePd5BbBMIU5O97VVsW-YDtc0peuCU",
+    "crv": "P-256",
+    "kid": "circulr-fixture-2026-05",
+    "alg": "ES256",
+    "use": "sig"
+  },
+  "kid": "circulr-fixture-2026-05",
+  "key_url": "https://fixtures.local/.well-known/verification-keys.json"
+}

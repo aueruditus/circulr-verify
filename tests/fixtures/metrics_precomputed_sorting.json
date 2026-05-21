@@ -1,0 +1,10 @@
+{
+  "programme_id": "prog-fixture-1",
+  "premium_pathway_rate": 0,
+  "net_carbon_impact_kg": 12,
+  "carbon_payback_ratio": 3,
+  "transaction_count": 0,
+  "data_status": "measured",
+  "metrics_source": "precomputed_sorting",
+  "period": null
+}

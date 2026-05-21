@@ -1,0 +1,58 @@
+{
+  "name": "@circulr/verify",
+  "version": "0.1.0-alpha.1",
+  "description": "Independent verifier for au.com.auspost.sustainability §7 Computation Manifests. CLI counterpart to the verify_computation MCP tool.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "circulr-verify": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint . --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fixtures:regenerate": "tsx tests/fixtures/_generate.ts",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "sustainability",
+    "verification",
+    "computation-manifest",
+    "auspost",
+    "universal-commerce-protocol",
+    "ucp"
+  ],
+  "author": "CirculR Tech",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aueruditus/circulr-verify.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aueruditus/circulr-verify/issues"
+  },
+  "homepage": "https://github.com/aueruditus/circulr-verify#readme",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "csv-parse": "^5.5.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}

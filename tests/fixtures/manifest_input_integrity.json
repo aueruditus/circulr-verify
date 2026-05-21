@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "programme_id": "prog-fixture-1",
+  "canvas_id": "canvas-fixture-1",
+  "published_version": 3,
+  "computed_at": "2026-05-04T08:42:11.000Z",
+  "inputs": [
+    {
+      "dataset": "material_flow_co2e",
+      "row_count": 3,
+      "hash": "0e135027f245036bc8b9d4588eeb55df8eca315503cee2e3c2b7e4bb6a8fcba9",
+      "columns": [
+        "co2e_kg",
+        "co2e_type",
+        "emission_factor_id",
+        "emission_factor_value",
+        "id",
+        "material_flow_record_id",
+        "quantity_kg"
+      ],
+      "period_start": null,
+      "period_end": null,
+      "attestation_reference": {
+        "registry_url": null,
+        "aggregate_record_id": "agg-fixture-1",
+        "manifest_hash_pinned": null
+      }
+    }
+  ],
+  "output": {
+    "metrics_hash": "71bedaae5ca72c8587d3cc9f4f1a0ef374aed0bd2b612f2ee180ba9059c9c240",
+    "metrics_source": "canonical_pipeline"
+  },
+  "computation": {
+    "transform": {
+      "function_id": "circulr.publish-to-passport.programme-metrics",
+      "function_version": "1.0.0",
+      "function_url": "https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/1.0.0/manifest.json",
+      "description": "Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests."
+    },
+    "emission_factors_hash": "deadbeef",
+    "rounding_rule": "ROUND_HALF_EVEN_4DP",
+    "null_handling": "null_as_zero"
+  },
+  "claim_level": "input_integrity",
+  "independence_check": {
+    "measurement_platform_id": "org-circulr",
+    "attestor_id": "org-circulr",
+    "certifier_ids": [],
+    "non_independent_pairs": [
+      {
+        "left": "measurement_platform",
+        "right": "attestor",
+        "shared_id": "org-circulr"
+      }
+    ],
+    "determined_level": "input_integrity",
+    "determined_at": "2026-05-04T08:42:11.000Z"
+  },
+  "signature": {
+    "algorithm": "ES256",
+    "public_key_id": "circulr-fixture-2026-05",
+    "public_key_url": "https://fixtures.local/.well-known/verification-keys.json",
+    "value": "QqlPkb__VvuPmg9dHs7_-dTAcI9rooruyomEuHRa0_ZS0lLSdBKCPfp0pPbw4HYBqUVbhRyMYGB8MmoXXWjmug"
+  }
+}
