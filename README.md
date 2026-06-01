@@ -112,6 +112,7 @@ Failure at any step is surfaced as `computation_unverifiable` with a specific su
 - **Whether the published key is the right key.** Key trust is established out of band — the verifier reads `signature.public_key_url` from the manifest. If the manifest points at a malicious key URL serving a key under the same `public_key_id`, the verifier would accept it. Mitigate by pinning the expected key URL via your own tooling, or by running the verifier against multiple environments and comparing.
 - **Whether the transform is correct in the abstract.** The verifier checks that a recompute under the declared transform reproduces the manifest's outputs. If the transform itself contains a bug, the verifier still reports VERIFIED — the manifest is internally consistent.
 - **Whether Tier 1 is a sufficient set of inputs to justify the per-row values.** It is not — Tier 1 is a projection. To verify per-row derivation from raw inputs, run with `--tier 2`.
+- **The per-pathway recovery breakdown.** Not yet bound by the manifest. The producer-side `SPEC_Pathways_Metric_Computation_Manifest` (inbound) will add a per-pathway binding under `manifest_v11` / `TRANSFORM_FUNCTION_VERSION 2.0.0`. Until that ships AND this verifier extends to cover it (a future release), per-pathway claims surface as `not_yet_verifiable`. The scalar metrics (`carbon_payback_ratio`, `net_carbon_impact_kg`, `transaction_count`, the `premium_pathway_rate` scalar) are bound and verifiable today.
 
 ## Architecture
 
@@ -133,7 +134,19 @@ No `@supabase/*`. No `@noble/*`. Pure `fetch()` + Web Crypto.
 
 ## Status
 
-Alpha. Tracks `au.com.auspost.sustainability` v0.4.2 §7. Will progress to v1.0.0 when PROD signing is live across the platform.
+**Alpha (`next` tag on npm).** Verifies manifests under `TRANSFORM_FUNCTION_VERSION 1.0.0` (the producer's current shape, anchored at CirculrDesignerGA commit `b3bfc026`). Tracks `au.com.auspost.sustainability` v0.4.2 §7.
+
+### Compatibility matrix
+
+| Manifest version | Verifier coverage |
+|---|---|
+| `manifest_v10` and earlier (`function_version 1.0.0`) | ✅ Aggregation Integrity + Input Integrity (with `--tier 2`) |
+| `manifest_v11` (`function_version 2.0.0`, per inbound producer pathways spec) | ⏳ Scalar metrics: ✅ (this verifier). Per-pathway recovery breakdown: ⏳ extension lands in a future release. |
+
+### Release plan
+
+- This `next`-tag alpha will not progress to `latest` until: (a) this verifier is extended to cover `manifest_v11`'s per-pathway recovery breakdown, AND (b) PROD signing is live across the platform, AND (c) the producer pathways spec is shipped.
+- Until then, `npm install @circulr/verify@next` is the canonical install command. `npm install @circulr/verify` (no tag) will fail to resolve until the first `latest`-tagged release.
 
 ## License
 
