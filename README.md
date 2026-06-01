@@ -145,8 +145,10 @@ No `@supabase/*`. No `@noble/*`. Pure `fetch()` + Web Crypto.
 
 ### Release plan
 
-- This `next`-tag alpha will not progress to `latest` until: (a) this verifier is extended to cover `manifest_v11`'s per-pathway recovery breakdown, AND (b) PROD signing is live across the platform, AND (c) the producer pathways spec is shipped.
-- Until then, `npm install @circulr/verify@next` is the canonical install command. `npm install @circulr/verify` (no tag) will fail to resolve until the first `latest`-tagged release.
+- **Current state**: the alpha (`0.1.0-alpha.x`) is published under BOTH the `next` and `latest` dist-tags. `npm install @circulr/verify` (no tag) and `npm install @circulr/verify@next` both resolve to the current alpha. The `latest` tag exists because of an [npm first-publish default](https://docs.npmjs.com/cli/v10/commands/npm-publish#tag) — every package needs a `latest` tag, and npm populates it on the first publish regardless of the `--tag` flag.
+- **v1.0.0 ships when** ALL of these are true: (a) this verifier is extended to cover `manifest_v11`'s per-pathway recovery breakdown, AND (b) PROD signing is live across the platform, AND (c) the producer pathways spec is shipped.
+- When v1.0.0 ships, the `latest` dist-tag moves to v1.0.0. The `next` tag will then move ahead with whatever new alpha/beta is in flight (if any).
+- **The version string is the strongest maturity signal**. `0.1.0-alpha.2` is explicitly alpha; treat it as such regardless of dist-tag.
 
 ## License
 
