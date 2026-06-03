@@ -27,6 +27,10 @@
 //     subtle.verify accepts the same format. Encoding is direct.
 // =============================================================================
 
+// Type-only import — the runtime dependency is one-way (pathway.ts imports
+// roundHalfEven from here), so this carries no import cycle.
+import type { PathwayOutput } from './pathway.js';
+
 const ROUNDING_DECIMALS = 4;
 
 /**
@@ -212,6 +216,15 @@ export interface DatasetHash {
 export interface OutputHash {
   metrics_hash: string;
   metrics_source: string;
+
+  // SPEC_Pathways_Metric_Computation_Manifest §5.4 (P5a) — the authoritative,
+  // signed per-(r_strategy, loop_type) recovery breakdown. Carried INSIDE the
+  // signed `output` block, so it is bound by the manifest signature. Optional in
+  // the TYPE so archived function_version 1.0.0 manifests (which predate the
+  // block) stay legal — mirrors claim_level? / independence_check? optionality.
+  // The v2.0.0 producer ALWAYS populates it (possibly []). Co-design D2 = A: this
+  // block is authoritative; the L2 outcomes_by_r_strategy is a checked projection.
+  pathway_outputs?: PathwayOutput[];
 }
 
 export interface TransformReference {
