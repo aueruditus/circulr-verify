@@ -20,11 +20,14 @@ const ENDPOINT = 'https://endpoint.test';
 const PROGRAMME_ID = 'prog-fixture-1';
 const TIER1_URL = 'https://fixtures.local/storage/v1/object/public/computation-exports/prog-fixture-1/t1_v3.csv';
 const TIER2_URL = 'https://fixtures.local/storage/v1/object/computation-exports/prog-fixture-1/t2_v3.csv';
+const PATHWAY_URL = 'https://fixtures.local/storage/v1/object/computation-exports/prog-fixture-1/pathway_v3.csv';
 
 interface Fixture {
   manifest: ComputationManifest;
   tier1Csv: string;
   tier2Csv?: string;
+  /** v2.0.0 only — the inputs[1] pathway-classification CSV. */
+  pathwayCsv?: string;
   metrics: Record<string, unknown>;
   publicJwk: unknown;
 }
@@ -34,16 +37,21 @@ let journeysFixture: Fixture;
 let sortingFixture: Fixture;
 let designFixture: Fixture;
 let inputIntegrityFixture: Fixture;
+let v2PathwayFixture: Fixture;
+let v2PathwayMismatchFixture: Fixture;
 
-async function loadFixture(slug: string, hasTier2 = false): Promise<Fixture> {
+async function loadFixture(slug: string, hasTier2 = false, hasPathway = false): Promise<Fixture> {
   const manifest = JSON.parse(await readFile(join(FIXTURES, `manifest_${slug}.json`), 'utf8')) as ComputationManifest;
   const tier1Csv = await readFile(join(FIXTURES, `tier1_${slug}.csv`), 'utf8');
   const tier2Csv = hasTier2
     ? await readFile(join(FIXTURES, `tier2_${slug}.csv`), 'utf8')
     : undefined;
+  const pathwayCsv = hasPathway
+    ? await readFile(join(FIXTURES, `pathway_${slug}.csv`), 'utf8')
+    : undefined;
   const metrics = JSON.parse(await readFile(join(FIXTURES, `metrics_${slug}.json`), 'utf8')) as Record<string, unknown>;
   const keys = JSON.parse(await readFile(join(FIXTURES, 'keys.json'), 'utf8')) as { publicJwk: unknown };
-  return { manifest, tier1Csv, tier2Csv, metrics, publicJwk: keys.publicJwk };
+  return { manifest, tier1Csv, tier2Csv, pathwayCsv, metrics, publicJwk: keys.publicJwk };
 }
 
 beforeAll(async () => {
@@ -51,6 +59,8 @@ beforeAll(async () => {
   journeysFixture = await loadFixture('enhanced_journeys');
   sortingFixture = await loadFixture('precomputed_sorting');
   designFixture = await loadFixture('designtime_estimation');
+  v2PathwayFixture = await loadFixture('v2_pathway', true, true);
+  v2PathwayMismatchFixture = await loadFixture('v2_pathway_mismatch', true, true);
   // Input integrity reuses the canonical_pipeline tier data with claim_level set.
   const ii = await loadFixture('canonical_pipeline', true);
   const iiManifest = JSON.parse(
@@ -71,6 +81,12 @@ function mockFetcher(opts: {
   serveJwk?: boolean;
   serveMetrics?: boolean;
   tier2RequiredToken?: string;
+  /** Serve the inputs[1] pathway CSV at PATHWAY_URL (RLS, requires token). */
+  servePathway?: boolean;
+  /** Advertise pathway_csv_url in the REST body. Default true. */
+  advertisePathwayUrl?: boolean;
+  /** Override the served pathway CSV bytes (e.g. tampered → hash break). */
+  pathwayOverride?: string;
 }) {
   const manifest = opts.manifestOverride === undefined ? opts.fixture.manifest : opts.manifestOverride;
   const tier1 = opts.tier1Override ?? opts.fixture.tier1Csv;
@@ -78,6 +94,8 @@ function mockFetcher(opts: {
   const serveJwk = opts.serveJwk ?? true;
   const serveMetrics = opts.serveMetrics ?? true;
   const tier2RequiredToken = opts.tier2RequiredToken ?? 'fixture-token';
+  const servePathway = opts.servePathway ?? false;
+  const advertisePathwayUrl = opts.advertisePathwayUrl ?? true;
 
   return async function fetcher(url: string | URL, init?: RequestInit): Promise<Response> {
     const u = typeof url === 'string' ? url : url.toString();
@@ -92,6 +110,7 @@ function mockFetcher(opts: {
         computation_manifest: manifest,
         tier1_csv_url: TIER1_URL,
         tier2_csv_url: TIER2_URL,
+        ...(advertisePathwayUrl ? { pathway_csv_url: PATHWAY_URL } : {}),
       };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
     }
@@ -116,6 +135,19 @@ function mockFetcher(opts: {
         return new Response('unauthorized', { status: 401 });
       }
       return new Response(opts.fixture.tier2Csv ?? '', { status: 200, headers: { 'content-type': 'text/csv' } });
+    }
+
+    // Pathway CSV (inputs[1] — RLS-restricted, same auth contract as Tier 2).
+    if (u === PATHWAY_URL) {
+      if (!servePathway) return new Response(null, { status: 404 });
+      const auth = (init?.headers as Record<string, string> | undefined)?.['authorization'];
+      if (auth !== `Bearer ${tier2RequiredToken}`) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      return new Response(opts.pathwayOverride ?? opts.fixture.pathwayCsv ?? '', {
+        status: 200,
+        headers: { 'content-type': 'text/csv' },
+      });
     }
 
     return new Response(null, { status: 404 });
@@ -299,5 +331,132 @@ describe('verify — environment isolation & Phase 7c backwards-compat', () => {
       expect(result.claim).toBe('aggregation_integrity');
       expect(result.context.manifest_claim_level).toBe('input_integrity');
     }
+  });
+});
+
+describe('verify — pathway composite (v2.0.0 / BRIEFING AC1–AC5)', () => {
+  it('AC1. v2 Tier 2 with pathway CSV → scalar VERIFIED + pathway VERIFIED (recompute + L2 projection)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v2PathwayFixture, serveTier2: true, servePathway: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      expect(result.context.pathway?.status).toBe('verified');
+      expect(result.context.pathway?.projection_checked).toBe(true);
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('pathway_input_hash');
+      expect(passed).toContain('pathway_recomputation');
+    }
+  });
+
+  it('AC5. v2 Tier 1 → scalar VERIFIED, pathway NOT_VERIFIABLE_YET (tier1 — does not fail the scalar)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 1,
+      fetcher: mockFetcher({ fixture: v2PathwayFixture }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('aggregation_integrity');
+      expect(result.context.pathway?.status).toBe('not_verifiable_yet');
+      expect(result.context.pathway?.reason).toBe('tier1');
+    }
+  });
+
+  it('AC5b. v2 Tier 2 but endpoint omits pathway_csv_url → scalar VERIFIED, pathway NOT_VERIFIABLE_YET (no_pathway_url)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({
+        fixture: v2PathwayFixture,
+        serveTier2: true,
+        servePathway: true,
+        advertisePathwayUrl: false,
+      }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.context.pathway?.status).toBe('not_verifiable_yet');
+      expect(result.context.pathway?.reason).toBe('no_pathway_url');
+    }
+  });
+
+  it('AC2. v2 Tier 2 with tampered pathway CSV (hash break) → MISMATCH(pathway_input_hash)', async () => {
+    const tampered = v2PathwayFixture.pathwayCsv!.replace('10.5', '999.5');
+    expect(tampered).not.toEqual(v2PathwayFixture.pathwayCsv);
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({
+        fixture: v2PathwayFixture,
+        serveTier2: true,
+        servePathway: true,
+        pathwayOverride: tampered,
+      }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('pathway_input_hash');
+      expect(result.context.pathway?.status).toBe('mismatch');
+    }
+  });
+
+  it('AC1b. Lying producer (signed block disagrees with honest inputs[1]) → MISMATCH(pathway_recomputation)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v2PathwayMismatchFixture, serveTier2: true, servePathway: true }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('pathway_recomputation');
+      expect(result.detail).toMatch(/kg/i);
+    }
+  });
+
+  it('AC4. Archived 1.0.0 manifest (no pathway_outputs block) still VERIFIES; pathway NOT_VERIFIABLE_YET (no_block)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: canonicalFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.context.pathway?.status).toBe('not_verifiable_yet');
+      expect(result.context.pathway?.reason).toBe('no_block');
+    }
+  });
+
+  it('AC3. v2 manifest with tampered signed block → MISMATCH(manifest_signature) before pathway runs', async () => {
+    const tamperedBlock = v2PathwayFixture.manifest.output.pathway_outputs!.map((e, i) =>
+      i === 0 ? { ...e, kg: e.kg + 1 } : e,
+    );
+    const mutated: ComputationManifest = {
+      ...v2PathwayFixture.manifest,
+      output: { ...v2PathwayFixture.manifest.output, pathway_outputs: tamperedBlock },
+    };
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v2PathwayFixture, manifestOverride: mutated, serveTier2: true, servePathway: true }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') expect(result.failed_at).toBe('manifest_signature');
   });
 });

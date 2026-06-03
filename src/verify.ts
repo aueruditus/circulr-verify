@@ -13,17 +13,25 @@ import {
   sha256Hex,
   verifyES256,
   type ClaimLevel,
+  type DatasetHash,
   type IndependenceCheck,
   type MetricsSource,
 } from './crypto.js';
 import {
   FetchError,
   fetchJwk,
+  fetchPathwayCsv,
   fetchProgrammeManifest,
   fetchTier1Csv,
   fetchTier2Csv,
 } from './fetch.js';
 import { metricsApproxEqual, recomputeForSource, type RecomputedMetrics } from './recompute.js';
+import {
+  comparePathwayBlock,
+  compareL2Projection,
+  recomputePathwayOutputs,
+  type PathwayOutput,
+} from './pathway.js';
 
 // =============================================================================
 // Public types
@@ -43,7 +51,32 @@ export type CheckName =
   | 'metrics_hash_binding'
   | 'tier1_input_aggregate'
   | 'tier2_input_hash'
-  | 'metric_recomputation';
+  | 'metric_recomputation'
+  | 'pathway_input_hash'
+  | 'pathway_recomputation';
+
+/**
+ * The pathway breakdown verdict — reported SEPARATELY from the scalar metric
+ * verdict (BRIEFING AC5 / AC20 honest-claim). The verifier never folds an
+ * unestablished pathway result into the scalar claim.
+ *
+ *  - `verified` — the (r_strategy, loop_type) block recomputed from the bound
+ *    inputs[1] CSV and matched the signed block (and, where present, the L2
+ *    projection).
+ *  - `mismatch` — recompute or projection diverged; the overall result is a
+ *    MISMATCH(pathway_recomputation), distinct from a scalar mismatch (D3).
+ *  - `not_verifiable_yet` — the block is signature-bound but was not
+ *    independently recomputed in this run (no block at all, Tier 1, or the
+ *    pathway input was unreachable). Does NOT fail the scalar result.
+ */
+export interface PathwayVerdict {
+  status: 'verified' | 'mismatch' | 'not_verifiable_yet';
+  /** not_verifiable_yet reason: no_block | tier1 | no_pathway_url | fetch_failed | no_input_hash. */
+  reason?: string;
+  /** True when a composite L2 outcomes_by_r_strategy projection was present and matched the block. */
+  projection_checked?: boolean;
+  detail?: string;
+}
 
 export interface PassedCheck {
   name: CheckName;
@@ -85,6 +118,10 @@ export interface VerifyContext {
   published_metrics?: Record<string, unknown>;
   /** Canonical signing body — surfaced in --verbose. */
   canonical_body?: string;
+  /** Pathway breakdown verdict — separate from the scalar claim (AC5). */
+  pathway?: PathwayVerdict;
+  /** The signed pathway_outputs[] block when present — surfaced in --verbose. */
+  pathway_block?: PathwayOutput[];
 }
 
 export type VerifyResult =
@@ -145,7 +182,7 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     throw e;
   }
 
-  const { manifest, source: manifestSource, tier1CsvUrl, tier2CsvUrl } = fetched;
+  const { manifest, source: manifestSource, tier1CsvUrl, tier2CsvUrl, pathwayCsvUrl } = fetched;
   const checks: Check[] = [];
   const context: VerifyContext = {
     programme_id: manifest.programme_id,
@@ -444,6 +481,47 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     tolerance_dp: 4,
   });
 
+  // ===========================================================================
+  // Pathway composite verification (v2.0.0 — BRIEFING_circulr_verify_Pathway_
+  // Verification). Reported as a SEPARATE verdict from the scalar claim (AC5).
+  //
+  // function_version awareness (item 3): the discriminator is the presence of
+  // output.pathway_outputs — the v2.0.0 producer always populates it; archived
+  // 1.0.0 manifests predate it. A missing block is honest not_verifiable_yet,
+  // NOT a failure — archived 1.0.0 verification must not break (AC4).
+  // ===========================================================================
+  const pathwayBlock = manifest.output.pathway_outputs;
+  const functionVersion = manifest.computation.transform.function_version;
+
+  if (pathwayBlock === undefined) {
+    context.pathway = {
+      status: 'not_verifiable_yet',
+      reason: 'no_block',
+      detail:
+        `Manifest function_version ${functionVersion} carries no output.pathway_outputs block; ` +
+        `the pathway breakdown is not part of this manifest.`,
+    };
+  } else {
+    // The block is bound by the manifest signature (manifest_signature passed),
+    // so its authenticity is established. Independent recompute (D2 = A: confirm
+    // the authoritative block, do not re-mirror) needs the RLS-restricted
+    // inputs[1] CSV — a Tier 2 capability. The verifier MUST NOT assert pathway
+    // integrity it did not independently establish (AC20).
+    context.pathway_block = pathwayBlock;
+    const pathwayMismatch = await verifyPathway({
+      tier: args.tier,
+      supabaseToken: args.supabaseToken,
+      pathwayCsvUrl,
+      pathwayBlock,
+      pathwayInput: manifest.inputs[1],
+      publishedMetrics,
+      checks,
+      context,
+      fetcher,
+    });
+    if (pathwayMismatch) return pathwayMismatch;
+  }
+
   // Step 11: report claim.
   //   --tier 1 → always Aggregation Integrity
   //   --tier 2 → Input Integrity iff the recompute succeeded against the raw inputs
@@ -457,4 +535,161 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     tier_run: args.tier,
     context,
   };
+}
+
+// =============================================================================
+// Pathway composite verification (BRIEFING items 1-4)
+// =============================================================================
+
+interface PathwayVerifyArgs {
+  tier: 1 | 2;
+  supabaseToken?: string;
+  pathwayCsvUrl?: string;
+  pathwayBlock: PathwayOutput[];
+  pathwayInput: DatasetHash | undefined;
+  publishedMetrics: Record<string, unknown> | null;
+  checks: Check[];
+  context: VerifyContext;
+  fetcher: typeof fetch;
+}
+
+/**
+ * Recompute and confirm the signed `pathway_outputs[]` block from the bound
+ * inputs[1] CSV. Mutates `context.pathway` (and pushes pathway checks) in place.
+ *
+ * Returns a MISMATCH VerifyResult when the pathway recompute, the inputs[1]
+ * hash, or the L2 projection diverges (D3 — distinct from a scalar mismatch).
+ * Returns `null` to let the caller proceed to the scalar `verified` result —
+ * including every not_verifiable_yet degrade (no Tier 2 access, no pathway URL,
+ * fetch failure): a pathway that cannot be independently recomputed must not
+ * fail the scalar claim (AC5/AC20).
+ */
+async function verifyPathway(a: PathwayVerifyArgs): Promise<VerifyResult | null> {
+  const { pathwayBlock, context, checks } = a;
+
+  // Independent recompute is a Tier 2 capability — inputs[1] is RLS-restricted.
+  if (a.tier !== 2 || !a.supabaseToken) {
+    context.pathway = {
+      status: 'not_verifiable_yet',
+      reason: 'tier1',
+      detail:
+        'The pathway-classification input (inputs[1]) is RLS-restricted; the signed block is ' +
+        'signature-bound but was not independently recomputed. Re-run --tier 2 --supabase-token ' +
+        'to reproduce the (r_strategy, loop_type) breakdown from raw transactions.',
+    };
+    return null;
+  }
+  if (!a.pathwayCsvUrl) {
+    context.pathway = {
+      status: 'not_verifiable_yet',
+      reason: 'no_pathway_url',
+      detail:
+        'Endpoint did not advertise pathway_csv_url; cannot fetch inputs[1] to recompute the ' +
+        'pathway breakdown. The signed block is signature-bound.',
+    };
+    return null;
+  }
+
+  let pathwayCsv: string;
+  try {
+    pathwayCsv = await fetchPathwayCsv(a.pathwayCsvUrl, a.supabaseToken, a.fetcher);
+  } catch (e) {
+    context.pathway = {
+      status: 'not_verifiable_yet',
+      reason: 'fetch_failed',
+      detail:
+        `Could not fetch the pathway-classification CSV: ${e instanceof Error ? e.message : String(e)}. ` +
+        `The signed block is signature-bound but was not independently recomputed.`,
+    };
+    return null;
+  }
+
+  // Bind the recompute input: SHA-256 of inputs[1] CSV must equal inputs[1].hash.
+  if (!a.pathwayInput?.hash) {
+    context.pathway = {
+      status: 'not_verifiable_yet',
+      reason: 'no_input_hash',
+      detail:
+        'Manifest has no inputs[1].hash to bind the pathway-classification CSV against; cannot ' +
+        'trust a recompute from an unbound input. The signed block is signature-bound.',
+    };
+    return null;
+  }
+  const pathwayHash = await sha256Hex(pathwayCsv);
+  if (pathwayHash !== a.pathwayInput.hash) {
+    const detail =
+      'SHA-256 of the pathway-classification CSV does not match manifest.inputs[1].hash — the ' +
+      'recompute input does not bind to what was signed.';
+    checks.push({
+      name: 'pathway_input_hash',
+      passed: false,
+      tier: 2,
+      expected: a.pathwayInput.hash,
+      actual: pathwayHash,
+      detail,
+    });
+    context.pathway = { status: 'mismatch', detail };
+    return {
+      kind: 'mismatch',
+      failed_at: 'pathway_input_hash',
+      detail,
+      tier_run: a.tier,
+      context,
+    };
+  }
+  checks.push({
+    name: 'pathway_input_hash',
+    passed: true,
+    tier: 2,
+    expected: a.pathwayInput.hash,
+    actual: pathwayHash,
+  });
+
+  // Recompute the composite block from the bound rows and compare to the signed
+  // binding (AC1). R11 must split into closed_loop + open_loop_downcycle.
+  const pathwayRows = parseCsv(pathwayCsv, {
+    columns: true,
+    skip_empty_lines: true,
+    cast: false,
+  }) as Array<Record<string, unknown>>;
+  const recomputed = recomputePathwayOutputs(pathwayRows);
+  const blockCmp = comparePathwayBlock(recomputed, pathwayBlock);
+  if (!blockCmp.ok) {
+    checks.push({ name: 'pathway_recomputation', passed: false, tolerance_dp: 4, detail: blockCmp.detail });
+    context.pathway = { status: 'mismatch', detail: blockCmp.detail };
+    return {
+      kind: 'mismatch',
+      failed_at: 'pathway_recomputation',
+      detail: blockCmp.detail,
+      tier_run: a.tier,
+      context,
+    };
+  }
+
+  // Assert the L2 outcomes_by_r_strategy projection equals the block at 4dp
+  // (D2 = A / AC3). Absent (pre-P5b coarse form or no projection) → not a
+  // failure; the authoritative block was still recomputed.
+  const proj = compareL2Projection(a.publishedMetrics?.outcomes_by_r_strategy, pathwayBlock);
+  if (proj.status === 'mismatch') {
+    checks.push({ name: 'pathway_recomputation', passed: false, tolerance_dp: 4, detail: proj.detail });
+    context.pathway = { status: 'mismatch', detail: proj.detail };
+    return {
+      kind: 'mismatch',
+      failed_at: 'pathway_recomputation',
+      detail: proj.detail,
+      tier_run: a.tier,
+      context,
+    };
+  }
+
+  checks.push({ name: 'pathway_recomputation', passed: true, tolerance_dp: 4 });
+  context.pathway = {
+    status: 'verified',
+    projection_checked: proj.status === 'match',
+    detail:
+      proj.status === 'match'
+        ? 'Pathway breakdown recomputed from inputs[1] and matched the signed block; L2 projection asserted equal at 4dp.'
+        : 'Pathway breakdown recomputed from inputs[1] and matched the signed block. No composite L2 projection present to cross-check (pre-P5b).',
+  };
+  return null;
 }
