@@ -147,6 +147,16 @@ const TRANSFORM_V2 = {
     'from those same rows.',
 };
 
+const TRANSFORM_V3 = {
+  function_id: 'circulr.publish-to-passport.programme-metrics',
+  function_version: '3.0.0',
+  function_url: 'https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/3.0.0/manifest.json',
+  description:
+    'Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. ' +
+    'v3.0.0 binds output.metrics_hash to a defined canonical metrics projection embedded as output.metrics, ' +
+    'making the scalar claim self-contained and reproducible without the passport endpoint serialisation.',
+};
+
 interface Fixture {
   manifest: ComputationManifest;
   tier1Csv: string;
@@ -584,6 +594,106 @@ async function buildV2PathwayMismatchFixture(privateJwk: JsonWebKey, kid: string
   };
 }
 
+/**
+ * v3.0.0 fixture (BUILD_MetricsHash_Embedded_Projection_v0_1 §4.2 locking test).
+ *
+ * metrics_hash binds the EMBEDDED output.metrics canonical projection — not the
+ * endpoint-served metrics view. To prove self-containment + endpoint-decoupling,
+ * the embedded projection and the endpoint `metrics` (the Fixture.metrics that
+ * becomes body.metrics at fetch time) are DELIBERATELY DIFFERENT objects:
+ *   - embedded: the 12-field projection, compliance as the literal "[]" string;
+ *   - endpoint: the richer presentation view (parsed compliance [], extra
+ *     measurement_* / data_provenance keys, programme_id + metrics_source).
+ * So a pre-v3 verifier (hashing body.metrics) would MISMATCH; the v3 branch
+ * verifies metrics_hash from the embedded copy and reports the endpoint divergence
+ * as a soft presentation-drift note. Scalar recompute at Tier 2 still reproduces
+ * net_carbon_impact_kg=12 / carbon_payback_ratio=3 against the bound projection.
+ */
+async function buildV3EmbeddedMetricsFixture(privateJwk: JsonWebKey, kid: string): Promise<Fixture> {
+  // precomputed_sorting inputs — avoided=18, generated=6, net=12, ratio=3.
+  const sortingTier2Rows = [
+    { avoided_emissions: 10, canvas_id: CANVAS_ID, id: 's1', total_program_emissions_kg: 4 },
+    { avoided_emissions: 8, canvas_id: CANVAS_ID, id: 's2', total_program_emissions_kg: 2 },
+  ];
+  const sortingTier2Columns = ['avoided_emissions', 'canvas_id', 'id', 'total_program_emissions_kg'];
+  const tier2Csv = rowsToCanonicalCsv(sortingTier2Rows, sortingTier2Columns);
+  const tier2Hash = await sha256Hex(tier2Csv);
+  const tier1Rows = sortingTier2Rows.map((r) => ({
+    avoided_emissions: r.avoided_emissions,
+    id: r.id,
+    total_program_emissions_kg: r.total_program_emissions_kg,
+  }));
+  const tier1Csv = rowsToCanonicalCsv(tier1Rows, ['avoided_emissions', 'id', 'total_program_emissions_kg']);
+
+  // The embedded canonical projection (the 12 GATE-0 fields). This is the
+  // metrics_hash preimage — it travels INSIDE the signed body.
+  const embeddedMetrics = {
+    avg_life_extension_months: null,
+    carbon_payback_ratio: 3,
+    net_carbon_impact_kg: 12,
+    premium_pathway_rate: 0,
+    repair_success_rate: null,
+    transaction_count: 0,
+    data_status: 'measured',
+    period_start: null,
+    period_end: null,
+    compliance: '[]',
+    emissions_methodology: null,
+    methodology_scope: null,
+  };
+  const metricsHash = await sha256Hex(canonicalJsonStringify(embeddedMetrics));
+
+  // The endpoint-served presentation view — intentionally a DIFFERENT object so
+  // hashing it would NOT reproduce metrics_hash (endpoint-decoupling proof).
+  const endpointMetrics = {
+    programme_id: PROGRAMME_ID,
+    metrics_source: 'precomputed_sorting',
+    premium_pathway_rate: 0,
+    net_carbon_impact_kg: 12,
+    carbon_payback_ratio: 3,
+    transaction_count: 0,
+    data_status: 'measured',
+    period: null,
+    compliance: [],
+    measurement_platform: 'Circulr Measurement Platform',
+    measurement_scope: 'scope_3',
+    data_provenance: 'measured',
+  };
+
+  const body: Omit<ComputationManifest, 'signature'> = {
+    version: '1.0',
+    programme_id: PROGRAMME_ID,
+    canvas_id: CANVAS_ID,
+    published_version: PUBLISHED_VERSION,
+    computed_at: COMPUTED_AT,
+    inputs: [{
+      dataset: 'sorting_items',
+      row_count: sortingTier2Rows.length,
+      hash: tier2Hash,
+      columns: sortingTier2Columns,
+      period_start: null,
+      period_end: null,
+    }],
+    output: {
+      metrics_hash: metricsHash,
+      metrics_source: 'precomputed_sorting',
+      metrics: embeddedMetrics,
+    },
+    computation: {
+      transform: TRANSFORM_V3,
+      emission_factors_hash: 'deadbeef',
+      rounding_rule: 'ROUND_HALF_EVEN_4DP',
+      null_handling: 'null_as_zero',
+    },
+  };
+  const sig = await signManifest(canonicalJsonStringify(body), privateJwk);
+  const manifest: ComputationManifest = {
+    ...body,
+    signature: { algorithm: 'ES256', public_key_id: kid, public_key_url: KEY_URL, value: sig },
+  };
+  return { manifest, tier1Csv, tier2Csv, metrics: endpointMetrics };
+}
+
 // =============================================================================
 // Entry
 // =============================================================================
@@ -602,6 +712,7 @@ async function main(): Promise<void> {
   const ii = await buildInputIntegrityFixture(privateJwk, kid);
   const v2 = await buildV2PathwayFixture(privateJwk, kid);
   const v2Mismatch = await buildV2PathwayMismatchFixture(privateJwk, kid);
+  const v3 = await buildV3EmbeddedMetricsFixture(privateJwk, kid);
 
   const writes: Array<[string, string]> = [
     ['manifest_canonical_pipeline.json', JSON.stringify(canonical.manifest, null, 2)],
@@ -635,6 +746,12 @@ async function main(): Promise<void> {
     ['tier2_v2_pathway_mismatch.csv', v2Mismatch.tier2Csv ?? ''],
     ['pathway_v2_pathway_mismatch.csv', v2Mismatch.pathwayCsv ?? ''],
     ['metrics_v2_pathway_mismatch.json', JSON.stringify(v2Mismatch.metrics, null, 2)],
+
+    // v3.0.0 — embedded output.metrics; endpoint metrics deliberately divergent.
+    ['manifest_v3_embedded.json', JSON.stringify(v3.manifest, null, 2)],
+    ['tier1_v3_embedded.csv', v3.tier1Csv],
+    ['tier2_v3_embedded.csv', v3.tier2Csv ?? ''],
+    ['metrics_v3_embedded.json', JSON.stringify(v3.metrics, null, 2)],
   ];
 
   for (const [name, body] of writes) {

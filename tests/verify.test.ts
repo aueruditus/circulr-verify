@@ -10,7 +10,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verify } from '../src/verify.js';
+import { manifestMajorVersion, verify } from '../src/verify.js';
 import type { ComputationManifest } from '../src/crypto.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +39,7 @@ let designFixture: Fixture;
 let inputIntegrityFixture: Fixture;
 let v2PathwayFixture: Fixture;
 let v2PathwayMismatchFixture: Fixture;
+let v3EmbeddedFixture: Fixture;
 
 async function loadFixture(slug: string, hasTier2 = false, hasPathway = false): Promise<Fixture> {
   const manifest = JSON.parse(await readFile(join(FIXTURES, `manifest_${slug}.json`), 'utf8')) as ComputationManifest;
@@ -61,6 +62,7 @@ beforeAll(async () => {
   designFixture = await loadFixture('designtime_estimation');
   v2PathwayFixture = await loadFixture('v2_pathway', true, true);
   v2PathwayMismatchFixture = await loadFixture('v2_pathway_mismatch', true, true);
+  v3EmbeddedFixture = await loadFixture('v3_embedded', true);
   // Input integrity reuses the canonical_pipeline tier data with claim_level set.
   const ii = await loadFixture('canonical_pipeline', true);
   const iiManifest = JSON.parse(
@@ -157,14 +159,20 @@ function mockFetcher(opts: {
 }
 
 describe('verify — honest per-claim independence (AC20 / D3)', () => {
-  it('a scalar metrics_hash mismatch does NOT suppress the pathway verdict (pathway evaluated independently)', async () => {
-    // Tier 2 with a valid pathway block + CSV, but TAMPERED served metrics so the
-    // scalar metrics_hash binding fails. The pathway claim is signature-bound and
-    // must still be established + reported (AC20) — never folded into / gated by
-    // the scalar claim. Regression lock for the P7 verify-leg fix (pathway eval
-    // moved above the scalar metrics_hash early-return). On the old ordering the
-    // metrics_hash mismatch returned before the pathway verdict was computed, so
-    // context.pathway was undefined; this test fails on that ordering.
+  it('a scalar recompute mismatch does NOT suppress the pathway verdict (pathway evaluated independently)', async () => {
+    // Tier 2 with a valid pathway block + CSV, but TAMPERED served metrics on a
+    // RECOMPUTABLE field so a hard scalar failure occurs. The pathway claim is
+    // signature-bound and must still be established + reported (AC20) — never
+    // folded into / gated by the scalar claim. Regression lock for the P7
+    // verify-leg fix (pathway eval moved ABOVE the scalar checks' early-return).
+    //
+    // NOTE: the hard scalar failure now surfaces at `metric_recomputation`, not
+    // `metrics_hash_binding`. Since BUILD_MetricsHash_Embedded_Projection_v0_1,
+    // a <3.0.0 (legacy whole-row) metrics_hash mismatch DEGRADES honestly (AC4)
+    // rather than hard-failing; this fixture is 2.0.0, so the tampered
+    // premium_pathway_rate is caught one check later when recompute disagrees.
+    // The ordering property under test is unchanged: pathway must be computed
+    // before the scalar early-return.
     const result = await verify({
       endpoint: ENDPOINT,
       programmeId: PROGRAMME_ID,
@@ -179,7 +187,7 @@ describe('verify — honest per-claim independence (AC20 / D3)', () => {
     });
     expect(result.kind).toBe('mismatch');
     if (result.kind === 'mismatch') {
-      expect(result.failed_at).toBe('metrics_hash_binding');
+      expect(result.failed_at).toBe('metric_recomputation');
       // The pathway claim was recomputed + established independently of the scalar failure.
       expect(result.context.pathway?.status).toBe('verified');
     }
@@ -490,5 +498,81 @@ describe('verify — pathway composite (v2.0.0 / BRIEFING AC1–AC5)', () => {
     });
     expect(result.kind).toBe('mismatch');
     if (result.kind === 'mismatch') expect(result.failed_at).toBe('manifest_signature');
+  });
+});
+
+describe('verify — metrics_hash embedded projection (BUILD_MetricsHash_Embedded_Projection_v0_1)', () => {
+  it('V3-1. v3 manifest: metrics_hash_binding verifies from EMBEDDED output.metrics even though the endpoint serves a different body.metrics (self-contained, endpoint-decoupled) [AC3]', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 1,
+      // Endpoint serves the divergent presentation view by default (fixture.metrics).
+      fetcher: mockFetcher({ fixture: v3EmbeddedFixture }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      const binding = result.context.checks.find((c) => c.name === 'metrics_hash_binding');
+      expect(binding?.passed).toBe(true);
+      // The bound (and recompute) source is the embedded projection, not the endpoint shape.
+      expect(result.context.published_metrics?.compliance).toBe('[]'); // embedded string form
+      // Endpoint serialisation diverges → soft presentation-drift note, never a failure.
+      expect(result.context.metrics_presentation_drift_note).toBeTruthy();
+      expect(result.context.metrics_hash_binding_note).toBeUndefined();
+    }
+  });
+
+  it('V3-2. v3 Tier 2 → VERIFIED Input Integrity; metric_recomputation runs against the EMBEDDED projection (not the divergent endpoint view) [AC3]', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      // Endpoint still serves its divergent presentation metrics (fixture.metrics);
+      // the binding + recompute must use the signed embedded output.metrics instead.
+      fetcher: mockFetcher({ fixture: v3EmbeddedFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('metrics_hash_binding');
+      expect(passed).toContain('metric_recomputation');
+      // Bound source is the embedded projection (compliance as the "[]" string),
+      // proving recompute did NOT silently fall back to the endpoint's parsed [].
+      expect(result.context.published_metrics?.compliance).toBe('[]');
+    }
+  });
+
+  it('V3-3. legacy (<3.0.0) whole-row metrics_hash that the endpoint cannot reproduce DEGRADES honestly — VERIFIED with a note, NOT a hard fail [AC4]', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 1,
+      // Add a presentation-only key so hash(endpoint metrics) != metrics_hash, while
+      // keeping the recomputable fields intact so metric_recomputation still passes.
+      fetcher: mockFetcher({
+        fixture: canonicalFixture,
+        metricsOverride: { ...canonicalFixture.metrics, presentation_only_key: 'not-in-preimage' },
+      }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      // Honest degrade: no metrics_hash_binding check pushed, note set instead.
+      expect(result.context.checks.find((c) => c.name === 'metrics_hash_binding')).toBeUndefined();
+      expect(result.context.metrics_hash_binding_note).toBeTruthy();
+      // Signature still verified (no regression on archived manifests).
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('manifest_signature');
+    }
+  });
+
+  it('V3-4. manifestMajorVersion parses the major component (and defaults unparseable → 0 = legacy branch)', async () => {
+    expect(manifestMajorVersion('3.0.0')).toBe(3);
+    expect(manifestMajorVersion('2.0.0')).toBe(2);
+    expect(manifestMajorVersion('10.4.1')).toBe(10);
+    expect(manifestMajorVersion(undefined)).toBe(0);
+    expect(manifestMajorVersion('')).toBe(0);
+    expect(manifestMajorVersion('not-a-version')).toBe(0);
   });
 });

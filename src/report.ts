@@ -68,6 +68,19 @@ export function formatHuman(result: VerifyResult, opts: { verbose: boolean; prog
         lines.push(line);
       }
 
+      // Legacy metrics_hash binding degrade — honest, not a failure (AC4).
+      if (result.context.metrics_hash_binding_note) {
+        lines.push('');
+        lines.push(chalk.yellow('! metrics_hash binding NOT_REPRODUCIBLE (legacy whole-row binding)'));
+        lines.push(chalk.dim(`  ${result.context.metrics_hash_binding_note}`));
+      }
+      // v3.0.0+ self-contained binding verified, but endpoint serialisation drifts.
+      if (result.context.metrics_presentation_drift_note) {
+        lines.push('');
+        lines.push(chalk.yellow('! endpoint metrics presentation drift (soft note)'));
+        lines.push(chalk.dim(`  ${result.context.metrics_presentation_drift_note}`));
+      }
+
       // Pathway breakdown — reported separately from the scalar claim (AC5).
       if (result.context.pathway) {
         lines.push('');
@@ -218,6 +231,8 @@ export function formatJson(result: VerifyResult, opts: { programmeId: string }):
         manifest_claim_level: result.context.manifest_claim_level,
         independence_check: result.context.independence_check,
         pathway: result.context.pathway ?? null,
+        metrics_hash_binding_note: result.context.metrics_hash_binding_note ?? null,
+        metrics_presentation_drift_note: result.context.metrics_presentation_drift_note ?? null,
       };
     }
     case 'mismatch':
