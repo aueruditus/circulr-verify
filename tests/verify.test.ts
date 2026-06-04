@@ -87,6 +87,8 @@ function mockFetcher(opts: {
   advertisePathwayUrl?: boolean;
   /** Override the served pathway CSV bytes (e.g. tampered → hash break). */
   pathwayOverride?: string;
+  /** Override the served REST `metrics` object (e.g. tampered → metrics_hash break). */
+  metricsOverride?: Record<string, unknown>;
 }) {
   const manifest = opts.manifestOverride === undefined ? opts.fixture.manifest : opts.manifestOverride;
   const tier1 = opts.tier1Override ?? opts.fixture.tier1Csv;
@@ -106,7 +108,7 @@ function mockFetcher(opts: {
       const body = {
         programme_id: PROGRAMME_ID,
         published_version: manifest?.published_version ?? 0,
-        metrics: opts.fixture.metrics,
+        metrics: opts.metricsOverride ?? opts.fixture.metrics,
         computation_manifest: manifest,
         tier1_csv_url: TIER1_URL,
         tier2_csv_url: TIER2_URL,
@@ -153,6 +155,36 @@ function mockFetcher(opts: {
     return new Response(null, { status: 404 });
   } as unknown as typeof fetch;
 }
+
+describe('verify — honest per-claim independence (AC20 / D3)', () => {
+  it('a scalar metrics_hash mismatch does NOT suppress the pathway verdict (pathway evaluated independently)', async () => {
+    // Tier 2 with a valid pathway block + CSV, but TAMPERED served metrics so the
+    // scalar metrics_hash binding fails. The pathway claim is signature-bound and
+    // must still be established + reported (AC20) — never folded into / gated by
+    // the scalar claim. Regression lock for the P7 verify-leg fix (pathway eval
+    // moved above the scalar metrics_hash early-return). On the old ordering the
+    // metrics_hash mismatch returned before the pathway verdict was computed, so
+    // context.pathway was undefined; this test fails on that ordering.
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({
+        fixture: v2PathwayFixture,
+        serveTier2: true,
+        servePathway: true,
+        metricsOverride: { ...v2PathwayFixture.metrics, premium_pathway_rate: 0.123456 },
+      }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('metrics_hash_binding');
+      // The pathway claim was recomputed + established independently of the scalar failure.
+      expect(result.context.pathway?.status).toBe('verified');
+    }
+  });
+});
 
 describe('verify — happy paths (Aggregation Integrity)', () => {
   it('1. canonical_pipeline Tier 1 verified → Aggregation Integrity', async () => {
