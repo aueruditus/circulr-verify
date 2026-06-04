@@ -694,6 +694,101 @@ async function buildV3EmbeddedMetricsFixture(privateJwk: JsonWebKey, kid: string
   return { manifest, tier1Csv, tier2Csv, metrics: endpointMetrics };
 }
 
+const TRANSFORM_V31 = {
+  function_id: 'circulr.publish-to-passport.programme-metrics',
+  function_version: '3.1.0',
+  function_url: 'https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/3.1.0/manifest.json',
+  description:
+    'Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. ' +
+    'v3.1.0 computes the scalar metrics over per-row 4dp-canonicalised (roundHalfEven) input values, matching the ' +
+    'bound Tier-2 CSV, so a verifier reproduces them exactly (round-then-sum, not sum-then-round).',
+};
+
+/**
+ * v3.1.0 fixture (BUILD_Metric_Recompute_Fidelity_v0_1 locking test). canonical_pipeline
+ * with sub-4dp per-row co2e_kg so that round-then-sum ≠ sum-then-round. The producer
+ * (v3.1.0) canonicalises each row to 4dp BEFORE summing — exactly the values the bound
+ * Tier-2 CSV carries — so the verifier (which sums the 4dp CSV rows) reproduces the metric
+ * EXACTLY. A pre-3.1.0 manifest (sum full precision, then round) would bind a different
+ * net_carbon_impact_kg and MISMATCH here. Embeds output.metrics (inherited from 3.0.0).
+ */
+async function buildV31CanonicalFixture(privateJwk: JsonWebKey, kid: string): Promise<Fixture> {
+  const round4 = (n: number) => Math.round(n * 10000) / 10000; // matches source + verifier round4
+
+  // Full-precision rows: 34.68411 (avoided ×2), 193.02464 (processing ×2).
+  // CSV serialiser rounds each cell to 4dp → 34.6841, 193.0246.
+  const tier2Rows = [
+    { co2e_kg: 34.68411, co2e_type: 'avoided', emission_factor_id: 'ef1', emission_factor_value: 1.15, id: 'r1', material_flow_record_id: 'm1', quantity_kg: 30.1601 },
+    { co2e_kg: 34.68411, co2e_type: 'avoided', emission_factor_id: 'ef1', emission_factor_value: 1.15, id: 'r2', material_flow_record_id: 'm2', quantity_kg: 30.1601 },
+    { co2e_kg: 193.02464, co2e_type: 'processing', emission_factor_id: 'ef2', emission_factor_value: 6.4, id: 'r3', material_flow_record_id: 'm1', quantity_kg: 30.1601 },
+    { co2e_kg: 193.02464, co2e_type: 'processing', emission_factor_id: 'ef2', emission_factor_value: 6.4, id: 'r4', material_flow_record_id: 'm2', quantity_kg: 30.1601 },
+  ];
+  const tier2Columns = ['co2e_kg', 'co2e_type', 'emission_factor_id', 'emission_factor_value', 'id', 'material_flow_record_id', 'quantity_kg'];
+  const tier2Csv = rowsToCanonicalCsv(tier2Rows, tier2Columns);
+  const tier2Hash = await sha256Hex(tier2Csv);
+  const tier1Rows = tier2Rows.map((r) => ({ co2e_kg: r.co2e_kg, co2e_type: r.co2e_type, id: r.id }));
+  const tier1Csv = rowsToCanonicalCsv(tier1Rows, ['co2e_kg', 'co2e_type', 'id']);
+
+  // v3.1.0 metric: canonicalise each row to 4dp, accumulate, then round4 the aggregate.
+  let avoided = 0, generated = 0;
+  for (const r of tier2Rows) {
+    const c = roundHalfEvenLocal(r.co2e_kg, 4);
+    if (r.co2e_type === 'avoided') avoided += c; else generated += c;
+  }
+  const net = round4(avoided - generated);                          // -316.681 (round-then-sum)
+  const ratio = round4(generated > 0 ? avoided / generated : 0);    // 0.1797
+
+  const embeddedMetrics = {
+    avg_life_extension_months: null,
+    carbon_payback_ratio: ratio,
+    net_carbon_impact_kg: net,
+    premium_pathway_rate: 0,
+    repair_success_rate: null,
+    transaction_count: 0,
+    data_status: 'measured',
+    period_start: null,
+    period_end: null,
+    compliance: '[]',
+    emissions_methodology: null,
+    methodology_scope: null,
+  };
+  const metricsHash = await sha256Hex(canonicalJsonStringify(embeddedMetrics));
+
+  const body: Omit<ComputationManifest, 'signature'> = {
+    version: '1.0',
+    programme_id: PROGRAMME_ID,
+    canvas_id: CANVAS_ID,
+    published_version: PUBLISHED_VERSION,
+    computed_at: COMPUTED_AT,
+    inputs: [{
+      dataset: 'material_flow_co2e',
+      row_count: tier2Rows.length,
+      hash: tier2Hash,
+      columns: tier2Columns,
+      period_start: null,
+      period_end: null,
+    }],
+    output: {
+      metrics_hash: metricsHash,
+      metrics_source: 'canonical_pipeline',
+      metrics: embeddedMetrics,
+    },
+    computation: {
+      transform: TRANSFORM_V31,
+      emission_factors_hash: 'deadbeef',
+      rounding_rule: 'ROUND_HALF_EVEN_4DP',
+      null_handling: 'null_as_zero',
+    },
+  };
+  const sig = await signManifest(canonicalJsonStringify(body), privateJwk);
+  const manifest: ComputationManifest = {
+    ...body,
+    signature: { algorithm: 'ES256', public_key_id: kid, public_key_url: KEY_URL, value: sig },
+  };
+  // Endpoint serves the same embedded projection (no drift) — focus is metric_recomputation.
+  return { manifest, tier1Csv, tier2Csv, metrics: embeddedMetrics };
+}
+
 // =============================================================================
 // Entry
 // =============================================================================
@@ -713,6 +808,7 @@ async function main(): Promise<void> {
   const v2 = await buildV2PathwayFixture(privateJwk, kid);
   const v2Mismatch = await buildV2PathwayMismatchFixture(privateJwk, kid);
   const v3 = await buildV3EmbeddedMetricsFixture(privateJwk, kid);
+  const v31 = await buildV31CanonicalFixture(privateJwk, kid);
 
   const writes: Array<[string, string]> = [
     ['manifest_canonical_pipeline.json', JSON.stringify(canonical.manifest, null, 2)],
@@ -752,6 +848,12 @@ async function main(): Promise<void> {
     ['tier1_v3_embedded.csv', v3.tier1Csv],
     ['tier2_v3_embedded.csv', v3.tier2Csv ?? ''],
     ['metrics_v3_embedded.json', JSON.stringify(v3.metrics, null, 2)],
+
+    // v3.1.0 — sub-4dp rows; round-then-sum metric reproducible from the 4dp CSV.
+    ['manifest_v31_canonical.json', JSON.stringify(v31.manifest, null, 2)],
+    ['tier1_v31_canonical.csv', v31.tier1Csv],
+    ['tier2_v31_canonical.csv', v31.tier2Csv ?? ''],
+    ['metrics_v31_canonical.json', JSON.stringify(v31.metrics, null, 2)],
   ];
 
   for (const [name, body] of writes) {

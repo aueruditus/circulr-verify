@@ -40,6 +40,7 @@ let inputIntegrityFixture: Fixture;
 let v2PathwayFixture: Fixture;
 let v2PathwayMismatchFixture: Fixture;
 let v3EmbeddedFixture: Fixture;
+let v31CanonicalFixture: Fixture;
 
 async function loadFixture(slug: string, hasTier2 = false, hasPathway = false): Promise<Fixture> {
   const manifest = JSON.parse(await readFile(join(FIXTURES, `manifest_${slug}.json`), 'utf8')) as ComputationManifest;
@@ -63,6 +64,7 @@ beforeAll(async () => {
   v2PathwayFixture = await loadFixture('v2_pathway', true, true);
   v2PathwayMismatchFixture = await loadFixture('v2_pathway_mismatch', true, true);
   v3EmbeddedFixture = await loadFixture('v3_embedded', true);
+  v31CanonicalFixture = await loadFixture('v31_canonical', true);
   // Input integrity reuses the canonical_pipeline tier data with claim_level set.
   const ii = await loadFixture('canonical_pipeline', true);
   const iiManifest = JSON.parse(
@@ -574,5 +576,37 @@ describe('verify — metrics_hash embedded projection (BUILD_MetricsHash_Embedde
     expect(manifestMajorVersion(undefined)).toBe(0);
     expect(manifestMajorVersion('')).toBe(0);
     expect(manifestMajorVersion('not-a-version')).toBe(0);
+  });
+});
+
+describe('verify — scalar recompute fidelity (BUILD_Metric_Recompute_Fidelity_v0_1)', () => {
+  it('V31-1. 3.1.0 canonical_pipeline Tier 2: metric_recomputation reproduces the round-then-sum metric EXACTLY (and the old sum-then-round value would have MISMATCHed)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v31CanonicalFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('metrics_hash_binding');
+      expect(passed).toContain('metric_recomputation');
+
+      // The bound net is the v3.1.0 round-then-sum value (per-row 4dp canonicalised).
+      const boundNet = (v31CanonicalFixture.manifest.output.metrics as Record<string, number>).net_carbon_impact_kg;
+      expect(boundNet).toBe(-316.681);
+
+      // The pre-3.1.0 path (sum full precision, then round) would bind a DIFFERENT value,
+      // so a sum-then-round manifest would MISMATCH at metric_recomputation. This is the
+      // regression lock: the discrepancy the fix closes is real and > the 4dp tolerance.
+      const fullAvoided = 34.68411 * 2;
+      const fullGenerated = 193.02464 * 2;
+      const sumThenRound = Math.round((fullAvoided - fullGenerated) * 10000) / 10000;
+      expect(sumThenRound).toBe(-316.6811);
+      expect(sumThenRound).not.toBe(boundNet);
+    }
   });
 });

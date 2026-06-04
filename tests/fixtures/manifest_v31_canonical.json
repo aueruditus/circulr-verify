@@ -1,0 +1,60 @@
+{
+  "version": "1.0",
+  "programme_id": "prog-fixture-1",
+  "canvas_id": "canvas-fixture-1",
+  "published_version": 3,
+  "computed_at": "2026-05-04T08:42:11.000Z",
+  "inputs": [
+    {
+      "dataset": "material_flow_co2e",
+      "row_count": 4,
+      "hash": "00164815467d2ea46d4f923383a9e7c902de4bedd393343aeaa65ebfcb11fb33",
+      "columns": [
+        "co2e_kg",
+        "co2e_type",
+        "emission_factor_id",
+        "emission_factor_value",
+        "id",
+        "material_flow_record_id",
+        "quantity_kg"
+      ],
+      "period_start": null,
+      "period_end": null
+    }
+  ],
+  "output": {
+    "metrics_hash": "1bc9eb2c0992c48e674e2e11f3423e6b70a4782343a76d43efa0a5b6c3509e61",
+    "metrics_source": "canonical_pipeline",
+    "metrics": {
+      "avg_life_extension_months": null,
+      "carbon_payback_ratio": 0.1797,
+      "net_carbon_impact_kg": -316.681,
+      "premium_pathway_rate": 0,
+      "repair_success_rate": null,
+      "transaction_count": 0,
+      "data_status": "measured",
+      "period_start": null,
+      "period_end": null,
+      "compliance": "[]",
+      "emissions_methodology": null,
+      "methodology_scope": null
+    }
+  },
+  "computation": {
+    "transform": {
+      "function_id": "circulr.publish-to-passport.programme-metrics",
+      "function_version": "3.1.0",
+      "function_url": "https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/3.1.0/manifest.json",
+      "description": "Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. v3.1.0 computes the scalar metrics over per-row 4dp-canonicalised (roundHalfEven) input values, matching the bound Tier-2 CSV, so a verifier reproduces them exactly (round-then-sum, not sum-then-round)."
+    },
+    "emission_factors_hash": "deadbeef",
+    "rounding_rule": "ROUND_HALF_EVEN_4DP",
+    "null_handling": "null_as_zero"
+  },
+  "signature": {
+    "algorithm": "ES256",
+    "public_key_id": "circulr-fixture-2026-05",
+    "public_key_url": "https://fixtures.local/.well-known/verification-keys.json",
+    "value": "-bfu0oEIRmYb8TghFmSfOmjEresrLyrTQCPRZc23D_uPGNqP7ILqlKJPDkazAAXQ7JB-njCnkeSkK11Qo4NVhA"
+  }
+}
