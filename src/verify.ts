@@ -401,6 +401,51 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     // Non-fatal; metrics-hash binding check just degrades.
   }
 
+  // ===========================================================================
+  // Pathway composite verification (v2.0.0 — BRIEFING_circulr_verify_Pathway_
+  // Verification). Reported as a SEPARATE verdict from the scalar claim (AC5/AC20).
+  //
+  // Evaluated HERE — before the scalar metrics_hash / metric_recomputation checks —
+  // so the pathway verdict is populated in `context.pathway` and reported even when
+  // a scalar check subsequently mismatches. The pathway block is signature-bound
+  // (manifest_signature passed above), so its authenticity is fully independent of
+  // the scalar `metrics_hash` binding; the honest-claim model (AC20) requires the
+  // pathway claim be reported on its own, never folded into or gated by the scalar
+  // claim. (`verifyPathway` returns null for every not_verifiable_yet degrade and
+  // only early-returns on a genuine MISMATCH(pathway_recomputation) — D3.)
+  //
+  // function_version awareness (item 3): the discriminator is the presence of
+  // output.pathway_outputs — the v2.0.0 producer always populates it; archived
+  // 1.0.0 manifests predate it. A missing block is honest not_verifiable_yet,
+  // NOT a failure — archived 1.0.0 verification must not break (AC4).
+  // ===========================================================================
+  const pathwayBlock = manifest.output.pathway_outputs;
+  const functionVersion = manifest.computation.transform.function_version;
+
+  if (pathwayBlock === undefined) {
+    context.pathway = {
+      status: 'not_verifiable_yet',
+      reason: 'no_block',
+      detail:
+        `Manifest function_version ${functionVersion} carries no output.pathway_outputs block; ` +
+        `the pathway breakdown is not part of this manifest.`,
+    };
+  } else {
+    context.pathway_block = pathwayBlock;
+    const pathwayMismatch = await verifyPathway({
+      tier: args.tier,
+      supabaseToken: args.supabaseToken,
+      pathwayCsvUrl,
+      pathwayBlock,
+      pathwayInput: manifest.inputs[1],
+      publishedMetrics,
+      checks,
+      context,
+      fetcher,
+    });
+    if (pathwayMismatch) return pathwayMismatch;
+  }
+
   if (publishedMetrics) {
     const publishedHash = await sha256Hex(canonicalJsonStringify(publishedMetrics));
     if (publishedHash !== manifest.output.metrics_hash) {
@@ -480,47 +525,6 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     passed: true,
     tolerance_dp: 4,
   });
-
-  // ===========================================================================
-  // Pathway composite verification (v2.0.0 — BRIEFING_circulr_verify_Pathway_
-  // Verification). Reported as a SEPARATE verdict from the scalar claim (AC5).
-  //
-  // function_version awareness (item 3): the discriminator is the presence of
-  // output.pathway_outputs — the v2.0.0 producer always populates it; archived
-  // 1.0.0 manifests predate it. A missing block is honest not_verifiable_yet,
-  // NOT a failure — archived 1.0.0 verification must not break (AC4).
-  // ===========================================================================
-  const pathwayBlock = manifest.output.pathway_outputs;
-  const functionVersion = manifest.computation.transform.function_version;
-
-  if (pathwayBlock === undefined) {
-    context.pathway = {
-      status: 'not_verifiable_yet',
-      reason: 'no_block',
-      detail:
-        `Manifest function_version ${functionVersion} carries no output.pathway_outputs block; ` +
-        `the pathway breakdown is not part of this manifest.`,
-    };
-  } else {
-    // The block is bound by the manifest signature (manifest_signature passed),
-    // so its authenticity is established. Independent recompute (D2 = A: confirm
-    // the authoritative block, do not re-mirror) needs the RLS-restricted
-    // inputs[1] CSV — a Tier 2 capability. The verifier MUST NOT assert pathway
-    // integrity it did not independently establish (AC20).
-    context.pathway_block = pathwayBlock;
-    const pathwayMismatch = await verifyPathway({
-      tier: args.tier,
-      supabaseToken: args.supabaseToken,
-      pathwayCsvUrl,
-      pathwayBlock,
-      pathwayInput: manifest.inputs[1],
-      publishedMetrics,
-      checks,
-      context,
-      fetcher,
-    });
-    if (pathwayMismatch) return pathwayMismatch;
-  }
 
   // Step 11: report claim.
   //   --tier 1 → always Aggregation Integrity
