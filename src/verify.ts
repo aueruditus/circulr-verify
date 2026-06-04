@@ -116,6 +116,21 @@ export interface VerifyContext {
   checks: Check[];
   recomputed?: RecomputedMetrics;
   published_metrics?: Record<string, unknown>;
+  /**
+   * BUILD_MetricsHash_Embedded_Projection_v0_1 — set when a legacy (<3.0.0)
+   * manifest's whole-row metrics_hash cannot be reproduced from the endpoint's
+   * served metrics. This is EXPECTED by construction (the legacy preimage was the
+   * full programme_metrics row, never the consumer view), so it degrades honestly
+   * here rather than hard-failing the scalar claim (AC4).
+   */
+  metrics_hash_binding_note?: string;
+  /**
+   * Set on a v3.0.0+ manifest when the SELF-CONTAINED embedded binding verified
+   * but the endpoint's served metrics serialise to a different hash — a soft
+   * presentation-drift note, never a failure (the bound claim is the embedded
+   * output.metrics, not the endpoint shape).
+   */
+  metrics_presentation_drift_note?: string;
   /** Canonical signing body — surfaced in --verbose. */
   canonical_body?: string;
   /** Pathway breakdown verdict — separate from the scalar claim (AC5). */
@@ -152,6 +167,19 @@ export type VerifyResult =
       requested_function_version: string;
       detail: string;
     };
+
+/**
+ * Parse the MAJOR component of a transform function_version ("3.0.0" → 3). Used
+ * to branch metrics_hash_binding between the legacy whole-row binding (<3.0.0)
+ * and the v3.0.0+ embedded, self-contained output.metrics projection. Returns 0
+ * for an unparseable/missing version (treated as legacy — the conservative
+ * branch that never hard-fails on an unreproducible binding).
+ */
+export function manifestMajorVersion(version: string | undefined): number {
+  if (!version) return 0;
+  const major = Number.parseInt(version.split('.')[0] ?? '', 10);
+  return Number.isFinite(major) ? major : 0;
+}
 
 // =============================================================================
 // Orchestration
@@ -446,13 +474,37 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     if (pathwayMismatch) return pathwayMismatch;
   }
 
-  if (publishedMetrics) {
-    const publishedHash = await sha256Hex(canonicalJsonStringify(publishedMetrics));
+  // ===========================================================================
+  // metrics_hash_binding — function_version branch (BUILD_MetricsHash_Embedded_
+  // Projection_v0_1). The discriminator is function_version >= 3.0.0 AND the
+  // presence of the embedded output.metrics projection.
+  //
+  //  - v3.0.0+ (embedded): hash the SELF-CONTAINED output.metrics that travels
+  //    inside the signature-bound body. metrics_hash MUST equal it — a mismatch
+  //    is an internally-inconsistent signed body (a genuine integrity failure),
+  //    not endpoint drift. No dependency on the endpoint serving a byte-identical
+  //    shape. A divergent endpoint serialisation is a soft presentation note only.
+  //  - <3.0.0 (legacy whole-row): the metrics_hash preimage was the full
+  //    programme_metrics row, which the consumer endpoint never serves verbatim.
+  //    A mismatch is therefore EXPECTED by construction — degrade honestly
+  //    (note, not a hard fail) so archived manifests still verify (AC4). A match
+  //    (e.g. faithfully-mirrored fixtures) still passes the check cleanly.
+  //
+  // `boundMetrics` is the authoritative metrics object the downstream recompute
+  // then compares against: the embedded projection at v3+, else the endpoint view.
+  // ===========================================================================
+  const useEmbeddedBinding = manifestMajorVersion(functionVersion) >= 3 &&
+    manifest.output.metrics != null;
+  const embeddedMetrics = manifest.output.metrics ?? null;
+  let boundMetrics: Record<string, unknown> | null = null;
+
+  if (useEmbeddedBinding && embeddedMetrics) {
+    const publishedHash = await sha256Hex(canonicalJsonStringify(embeddedMetrics));
     if (publishedHash !== manifest.output.metrics_hash) {
       const detail =
-        `Canonical hash of published metrics does not match manifest.output.metrics_hash. ` +
-        `Either the published metrics were mutated post-signing, or the endpoint's serialisation ` +
-        `of the metrics row differs from what was hashed.`;
+        `Embedded output.metrics does not hash to manifest.output.metrics_hash. ` +
+        `The signed manifest body is internally inconsistent (output.metrics was mutated, ` +
+        `or metrics_hash was computed over a different object).`;
       checks.push({
         name: 'metrics_hash_binding',
         passed: false,
@@ -466,7 +518,7 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
         failed_at: 'metrics_hash_binding',
         detail,
         tier_run: args.tier,
-        context: { ...context, published_metrics: publishedMetrics },
+        context: { ...context, published_metrics: embeddedMetrics },
       };
     }
     checks.push({
@@ -476,6 +528,41 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
       expected: manifest.output.metrics_hash,
       actual: publishedHash,
     });
+    boundMetrics = embeddedMetrics;
+    context.published_metrics = embeddedMetrics;
+
+    // Soft cross-check: does the endpoint's served view serialise to the same
+    // hash? Drift is presentation-only and never fails the bound claim.
+    if (publishedMetrics) {
+      const endpointHash = await sha256Hex(canonicalJsonStringify(publishedMetrics));
+      if (endpointHash !== manifest.output.metrics_hash) {
+        context.metrics_presentation_drift_note =
+          `Endpoint /metrics serialises to a different hash (${endpointHash}) than the embedded, ` +
+          `signature-bound output.metrics (${manifest.output.metrics_hash}). The bound claim is the ` +
+          `embedded projection; the endpoint shape is presentation only.`;
+      }
+    }
+  } else if (publishedMetrics) {
+    const publishedHash = await sha256Hex(canonicalJsonStringify(publishedMetrics));
+    if (publishedHash === manifest.output.metrics_hash) {
+      checks.push({
+        name: 'metrics_hash_binding',
+        passed: true,
+        algorithm: 'SHA-256',
+        expected: manifest.output.metrics_hash,
+        actual: publishedHash,
+      });
+    } else {
+      // Legacy whole-row binding — not consumer-reproducible by construction.
+      // Degrade honestly (AC4): no failed check, no scalar mismatch.
+      context.metrics_hash_binding_note =
+        `function_version ${functionVersion} bound metrics_hash to the whole programme_metrics row, ` +
+        `which the consumer endpoint does not serve verbatim — so this binding is not independently ` +
+        `reproducible (expected for legacy manifests). The manifest signature and pathway block remain ` +
+        `verified; only the scalar metrics_hash binding is not reproducible. Republish at v3.0.0+ for a ` +
+        `self-contained, reproducible binding.`;
+    }
+    boundMetrics = publishedMetrics;
     context.published_metrics = publishedMetrics;
   }
 
@@ -487,10 +574,13 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
   );
   context.recomputed = recomputed;
 
-  // Compare against published values for each recomputable field.
-  if (publishedMetrics) {
+  // Compare against the bound metric values for each recomputable field. At
+  // v3.0.0+ this is the embedded, signature-bound projection (so the recompute
+  // confirms the SIGNED claim, not merely the endpoint view); at <3.0.0 it falls
+  // back to the endpoint's served metrics.
+  if (boundMetrics) {
     for (const field of recomputed.recomputed_fields) {
-      const published = Number(publishedMetrics[field] ?? 0);
+      const published = Number(boundMetrics[field] ?? 0);
       const computed = recomputed[field];
       if (!metricsApproxEqual(published, computed)) {
         const detail =

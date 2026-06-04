@@ -1,0 +1,57 @@
+{
+  "version": "1.0",
+  "programme_id": "prog-fixture-1",
+  "canvas_id": "canvas-fixture-1",
+  "published_version": 3,
+  "computed_at": "2026-05-04T08:42:11.000Z",
+  "inputs": [
+    {
+      "dataset": "sorting_items",
+      "row_count": 2,
+      "hash": "7ce2ee4340ee26ee3e05a7ef0c814870a970268204d3a9c5e0a3224445450f21",
+      "columns": [
+        "avoided_emissions",
+        "canvas_id",
+        "id",
+        "total_program_emissions_kg"
+      ],
+      "period_start": null,
+      "period_end": null
+    }
+  ],
+  "output": {
+    "metrics_hash": "2222be8f69f7d91b7235baed98f9aa5f14f35a9b3083e47fabd467bdaa3da9ec",
+    "metrics_source": "precomputed_sorting",
+    "metrics": {
+      "avg_life_extension_months": null,
+      "carbon_payback_ratio": 3,
+      "net_carbon_impact_kg": 12,
+      "premium_pathway_rate": 0,
+      "repair_success_rate": null,
+      "transaction_count": 0,
+      "data_status": "measured",
+      "period_start": null,
+      "period_end": null,
+      "compliance": "[]",
+      "emissions_methodology": null,
+      "methodology_scope": null
+    }
+  },
+  "computation": {
+    "transform": {
+      "function_id": "circulr.publish-to-passport.programme-metrics",
+      "function_version": "3.0.0",
+      "function_url": "https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/3.0.0/manifest.json",
+      "description": "Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. v3.0.0 binds output.metrics_hash to a defined canonical metrics projection embedded as output.metrics, making the scalar claim self-contained and reproducible without the passport endpoint serialisation."
+    },
+    "emission_factors_hash": "deadbeef",
+    "rounding_rule": "ROUND_HALF_EVEN_4DP",
+    "null_handling": "null_as_zero"
+  },
+  "signature": {
+    "algorithm": "ES256",
+    "public_key_id": "circulr-fixture-2026-05",
+    "public_key_url": "https://fixtures.local/.well-known/verification-keys.json",
+    "value": "adz78WsxH8p3i1Txkitm9zMeCNVzt4ix-Gk36C36M0w_ZW-4pmYMLsQ8TdoJanIJeFXENHUTzBx1qj0U1HUUVQ"
+  }
+}
