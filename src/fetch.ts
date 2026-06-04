@@ -191,14 +191,21 @@ export async function fetchJwk(
     throw new FetchError('transport', `JWK ${publicKeyUrl} returned ${resp.status}`);
   }
   const keyset = (await resp.json()) as JWKKeyset;
-  const key = keyset.keys?.find((k) => k.kid === publicKeyId);
-  if (!key) {
+  // The live verification-keys.{env}.json wraps each key as
+  // { id, status, valid_from, public_key_jwk: { kty, crv, x, y } } and carries
+  // the identifier in `id`; flat-JWK fixtures use a top-level `kid`. Accept both:
+  // match the identifier on kid|id, and unwrap public_key_jwk when present.
+  const entry = keyset.keys?.find(
+    (k) => k.kid === publicKeyId || (k as { id?: string }).id === publicKeyId,
+  );
+  if (!entry) {
     throw new FetchError(
       'jwk_key_id_missing',
       `Key id "${publicKeyId}" absent from key set at ${publicKeyUrl}`,
     );
   }
-  return key;
+  const wrapped = (entry as { public_key_jwk?: ES256JWK }).public_key_jwk;
+  return (wrapped ?? entry) as ES256JWK;
 }
 
 /**
