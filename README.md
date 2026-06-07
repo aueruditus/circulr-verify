@@ -134,21 +134,29 @@ No `@supabase/*`. No `@noble/*`. Pure `fetch()` + Web Crypto.
 
 ## Status
 
-**Alpha (`next` tag on npm).** Verifies manifests under `TRANSFORM_FUNCTION_VERSION 1.0.0` (the producer's current shape, anchored at CirculrDesignerGA commit `b3bfc026`). Tracks `au.com.auspost.sustainability` v0.4.2 §7.
+**Stable (v1.0.0, `latest` on npm).** Verifies manifests under `TRANSFORM_FUNCTION_VERSION 1.0.0` and `3.x.x` (archived + embedded-projection shapes, anchored at CirculrDesignerGA commit `b3bfc026`). Tracks `au.com.auspost.sustainability` v0.4.2 §7. Production-proven — used to reproduce the §S6 RMW proof.
+
+### What v1.0.0 includes
+
+Since the alpha (`0.1.0-alpha.2`), the following have shipped:
+
+- **Composite-pathway recompute** (#6) — per-pathway recovery breakdown recomputed from the `programme_pathways` table.
+- **Live-JWKS wrapper** (#8) — accepts the platform's current `{ id, public_key_jwk }` verification-key shape.
+- **Independent pathway verdict** (#9) — pathway claim reported independently of the scalar `metrics_hash` check (AC20 compliance).
+- **Embedded-projection / `function_version` branching** (#10) — verifies `manifest_v3x` embedded-projection manifests in addition to `manifest_v10` archived manifests; branches on `TRANSFORM_FUNCTION_VERSION`.
+- **3.1.0 metric-recomputation fidelity fixtures** (#11) — byte-stable canonical fixtures locking the round-then-sum recompute contract for `function_version 3.1.0`.
 
 ### Compatibility matrix
 
 | Manifest version | Verifier coverage |
 |---|---|
-| `manifest_v10` and earlier (`function_version 1.0.0`) | ✅ Aggregation Integrity + Input Integrity (with `--tier 2`) |
-| `manifest_v11` (`function_version 2.0.0`, per inbound producer pathways spec) | ⏳ Scalar metrics: ✅ (this verifier). Per-pathway recovery breakdown: ⏳ extension lands in a future release. |
+| `manifest_v10` and earlier (`function_version 1.0.0`) | Aggregation Integrity + Input Integrity (with `--tier 2`) |
+| `manifest_v3x` (`function_version 3.x.x`, embedded-projection) | Aggregation Integrity + Input Integrity (with `--tier 2`) |
+| `manifest_v11` (`function_version 2.0.0`, transactions-only, per inbound producer pathways spec) | Scalar metrics: covered by this verifier. Per-pathway recovery breakdown: extension lands in a future major (2.0.0). Until that ships, per-pathway claims surface as `not_yet_verifiable`. |
 
-### Release plan
+### Versioning
 
-- **Current state**: the alpha (`0.1.0-alpha.x`) is published under BOTH the `next` and `latest` dist-tags. `npm install @circulr/verify` (no tag) and `npm install @circulr/verify@next` both resolve to the current alpha. The `latest` tag exists because of an [npm first-publish default](https://docs.npmjs.com/cli/v10/commands/npm-publish#tag) — every package needs a `latest` tag, and npm populates it on the first publish regardless of the `--tag` flag.
-- **v1.0.0 ships when** ALL of these are true: (a) this verifier is extended to cover `manifest_v11`'s per-pathway recovery breakdown, AND (b) PROD signing is live across the platform, AND (c) the producer pathways spec is shipped.
-- When v1.0.0 ships, the `latest` dist-tag moves to v1.0.0. The `next` tag will then move ahead with whatever new alpha/beta is in flight (if any).
-- **The version string is the strongest maturity signal**. `0.1.0-alpha.2` is explicitly alpha; treat it as such regardless of dist-tag.
+1.0.0 declares the current API stable. The `manifest_v11` / `function_version 2.0.0` transactions-only work (per the inbound producer `SPEC_Pathways_Metric_Computation_Manifest`) is a future major release (2.0.0). The version string is the maturity signal — `latest` resolves to 1.0.0.
 
 ## License
 
