@@ -7,3 +7,6 @@ dist/
 .vscode/
 .idea/
 coverage/
+
+# Internal Claude Code project memory — untracked but kept locally
+CLAUDE.md

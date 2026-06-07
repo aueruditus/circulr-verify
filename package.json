@@ -1,6 +1,6 @@
 {
   "name": "@circulr/verify",
-  "version": "0.1.0-alpha.1",
+  "version": "1.0.0",
   "description": "Independent verifier for au.com.auspost.sustainability §7 Computation Manifests. CLI counterpart to the verify_computation MCP tool.",
   "type": "module",
   "main": "dist/index.js",

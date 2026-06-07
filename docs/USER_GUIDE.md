@@ -3,8 +3,8 @@
 | Field | Value |
 |---|---|
 | **Tool** | `@circulr/verify` (CLI) |
-| **Version** | 0.1.0-alpha.1 |
-| **Status** | Alpha — see [§14 Status & roadmap](#14-status--roadmap) |
+| **Version** | 1.0.0 |
+| **Status** | Stable (`latest` on npm) — see [§14 Status & roadmap](#14-status--roadmap) |
 | **Spec** | `au.com.auspost.sustainability` v0.4.2 §7 (Computation Manifest), §7.4 (Independent Reproduction Protocol) |
 | **Source** | https://github.com/aueruditus/circulr-verify |
 | **License** | MIT |
@@ -67,9 +67,24 @@ node --version
 
 ## 3. Installation
 
-There are three installation modes. **Only mode A works today**; modes B and C are gated on the spec §9 rollout.
+### A. npm (recommended)
 
-### A. Local clone (works today)
+```bash
+npm install -g @circulr/verify
+circulr-verify --programme-id <uuid>
+```
+
+The binary resolves as `circulr-verify` on your `PATH`.
+
+### B. `npx` (no install)
+
+```bash
+npx @circulr/verify --programme-id <uuid>
+```
+
+`npx` downloads the package on demand — no install step.
+
+### C. Local clone (development / offline)
 
 ```bash
 git clone git@github.com:aueruditus/circulr-verify.git
@@ -86,39 +101,14 @@ To run the test suite:
 npm test
 ```
 
-The repository is currently **private** during the alpha. You need read access on `aueruditus/circulr-verify` to clone.
-
-### B. `npx` (when published as alpha to npm — spec §9 step 3)
-
-When `@circulr/verify` is published to npm under the `next` dist-tag:
-
-```bash
-npx @circulr/verify@next --programme-id <uuid>
-```
-
-`npx` downloads the package on demand — no install step.
-
-### C. Global install (when v1.0.0 ships — spec §9 step 9)
-
-When the verifier ships at `latest` on npm:
-
-```bash
-npm install -g @circulr/verify
-circulr-verify --programme-id <uuid>
-```
-
-The binary will resolve as `circulr-verify` on your `PATH`.
-
-> **Why aren't B and C live yet?** Per the spec, the CLI must not hit npm `latest` until PROD signing is live across the platform — otherwise the README example wouldn't verify against prod. The alpha (`next`) tag will land first, after `circulr-mcp-passport`'s Phase 7 provisions the REST surface the verifier consumes.
-
 ---
 
 ## 4. Quick start
 
-After installing (mode A above), the simplest end-to-end run:
+The simplest end-to-end run:
 
 ```bash
-node dist/index.js --programme-id <uuid>
+npx @circulr/verify --programme-id <uuid>
 ```
 
 Default behaviour:
@@ -130,14 +120,16 @@ Default behaviour:
 For machine-parseable output:
 
 ```bash
-node dist/index.js --programme-id <uuid> --format json
+npx @circulr/verify --programme-id <uuid> --format json
 ```
 
 For the stronger Input Integrity check (programme-participant access required):
 
 ```bash
-node dist/index.js --programme-id <uuid> --tier 2 --supabase-token $TOKEN
+npx @circulr/verify --programme-id <uuid> --tier 2 --supabase-token $TOKEN
 ```
+
+If running from a local clone (`node dist/index.js`), the arguments are identical.
 
 ---
 
@@ -299,7 +291,7 @@ Schema notes:
 Use these codes in CI gates:
 
 ```bash
-node dist/index.js --programme-id "$PROG" --format json
+npx @circulr/verify --programme-id "$PROG" --format json
 case $? in
   0) echo "verified" ;;
   1) echo "mismatch — gate failed"; exit 1 ;;
@@ -413,7 +405,7 @@ The verifier is designed to gate releases. A minimal GitHub Actions step:
 ```yaml
 - name: Verify programme metrics
   run: |
-    node dist/index.js \
+    npx @circulr/verify \
       --programme-id ${{ vars.PROGRAMME_ID }} \
       --endpoint ${{ vars.CIRCULR_ENDPOINT }} \
       --format json > verify.json
@@ -425,7 +417,7 @@ For programme-participant CI checks at Tier 2:
 ```yaml
 - name: Verify Input Integrity
   run: |
-    node dist/index.js \
+    npx @circulr/verify \
       --programme-id ${{ vars.PROGRAMME_ID }} \
       --supabase-token ${{ secrets.SUPABASE_JWT }} \
       --format json > verify.json
@@ -512,32 +504,29 @@ Confirm Node version: `node --version` must be ≥ 20.
 
 ## 14. Status & roadmap
 
-| Phase | What lands | Status |
-|---|---|---|
-| 1 | CLI scaffolding + crypto + fetch + verify + recompute + formatters + tests | ✅ Done (`dev`) |
-| 2 | First operator-observed PR through CI gate → branch protection on `test`/`main` | Pending operator |
-| 3 | `circulr-mcp-passport` Phase 7 — REST `/api/programme/:id/metrics` + `verify_computation` MCP tool with URL hints | Pending |
-| 4 | RMW end-to-end DEV verification transcript → README example | Gated on Phase 3 |
-| 5 | npm publish to `next` dist-tag (`npx @circulr/verify@next`) | Gated on Phase 4 |
-| 6 | TEST + PROD signing keys roll out | Gated on H5.02 Phase 12 (devops) |
-| 7 | v1.0.0 publish to npm `latest` | Gated on Phase 6 |
-| 8 | Public visibility flip (this repository) | Operator decision |
-| 9 | Standard v0.5.x amendment lands publicly | Standards-process |
+**v1.0.0 is the first stable release** (`latest` on npm, production-proven). The table below shows what has shipped and what is planned for future majors.
 
-Known divergences between the v0.3 spec and the implementation are catalogued in [`COMPLETION_circulr_verify_CLI_Phase1_6`](https://github.com/aueruditus/circulr-verify) §3 (Tier 1 hash binding semantics; rounder discrepancy; REST URL hint field names). These will be reconciled in spec v0.4.
+| Milestone | What lands | Status |
+|---|---|---|
+| CLI scaffolding + crypto + fetch + verify + recompute + formatters + tests | Phase 1 foundation | Done |
+| Branch protection + CI gate | `test`/`main` protected | Done |
+| `circulr-mcp-passport` REST surface + `verify_computation` MCP tool | URL-hint endpoint | Done |
+| Live-JWKS wrapper + independent pathway verdict + embedded-projection branching | PRs #8, #9, #10 | Done |
+| 3.1.0 fidelity fixtures | PR #11 | Done |
+| **v1.0.0 stable release** (`latest`) | This release | Done |
+| `manifest_v11` / `function_version 2.0.0` per-pathway recovery breakdown | v2.0.0 (future major) | Planned — gated on producer spec shipment |
+| Standard v0.5.x amendment | Standards-process | Pending |
 
 ---
 
 ## 15. Reporting issues
 
-While the repository is private and pre-1.0:
-
 - Bug reports / behaviour deviations: open an issue at https://github.com/aueruditus/circulr-verify/issues.
-- Spec deviations or contract questions: cross-reference `SPEC_H5_03_04_09_Cross_Repo_Verifier_v0_3.md` in the issue body so the spec author can track required amendments.
-- Security issues (manifest forgery vectors, signature-bypass classes): do **not** open a public issue — email the maintainer directly. (Address pending; will be added at public-visibility flip.)
+- Spec deviations or contract questions: cross-reference the relevant spec identifier in the issue body so the spec author can track required amendments.
+- Security issues (manifest forgery vectors, signature-bypass classes): do **not** open a public issue — email the maintainer directly at ian.wong@eruditus.com.au.
 
-When public, the verifier will accept PRs against `dev`; the constellation's conventional-commit + linear-history + auto-merge-on-CI workflow applies.
+The verifier accepts PRs against `dev`; the constellation's conventional-commit + linear-history + CI-gate workflow applies.
 
 ---
 
-*Doc v1, 2026-05-21.*
+*Doc v2, 2026-06-07. Updated for v1.0.0 stable release.*

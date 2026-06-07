@@ -1,0 +1,7 @@
+id,loop_type,quantity_kg,r_strategy
+t1,reuse,10.5,R3_Reuse
+t2,reuse,8.1,r2_reuse
+t3,closed_loop,20,R11
+t4,closed_loop,15.5,r7_recycle
+t5,closed_loop,5,recycle
+t6,open_loop_downcycle,12,R11
