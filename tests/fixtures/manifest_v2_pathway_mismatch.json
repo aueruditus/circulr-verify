@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "programme_id": "prog-fixture-1",
+  "canvas_id": "canvas-fixture-1",
+  "published_version": 3,
+  "computed_at": "2026-05-04T08:42:11.000Z",
+  "inputs": [
+    {
+      "dataset": "sorting_items",
+      "row_count": 2,
+      "hash": "cec856e95765882bd0066375b89d1bdb748359d0fceeac372616b454e5ba7a83",
+      "columns": [
+        "avoided_emissions",
+        "canvas_id",
+        "id",
+        "total_program_emissions_kg"
+      ],
+      "period_start": null,
+      "period_end": null
+    },
+    {
+      "dataset": "enhanced_transactions",
+      "row_count": 6,
+      "hash": "2966522efd29517d6fa0a95d4f49fa18062c5552a67e7ad6101bcf474e3e3664",
+      "columns": [
+        "id",
+        "loop_type",
+        "quantity_kg",
+        "r_strategy"
+      ],
+      "period_start": null,
+      "period_end": null
+    }
+  ],
+  "output": {
+    "metrics_hash": "0127a5b6cb1074f4c91323dbf54bce6eef04bec6fc6464bec2fbb7eeb7afbfb5",
+    "metrics_source": "precomputed_sorting",
+    "pathway_outputs": [
+      {
+        "r_strategy": "R5",
+        "loop_type": "reuse",
+        "events": 2,
+        "kg": 23.6,
+        "rate": 0.2616
+      },
+      {
+        "r_strategy": "R11",
+        "loop_type": "closed_loop",
+        "events": 3,
+        "kg": 40.5,
+        "rate": 0.5696
+      },
+      {
+        "r_strategy": "R11",
+        "loop_type": "open_loop_downcycle",
+        "events": 1,
+        "kg": 12,
+        "rate": 0.1688
+      }
+    ]
+  },
+  "computation": {
+    "transform": {
+      "function_id": "circulr.publish-to-passport.programme-metrics",
+      "function_version": "2.0.0",
+      "function_url": "https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/2.0.0/manifest.json",
+      "description": "Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. v2.0.0 hashes a second input — the per-transaction pathway classification (the (r_strategy, loop_type) key on enhanced_transactions) — and binds an authoritative output.pathway_outputs[] breakdown aggregated from those same rows."
+    },
+    "emission_factors_hash": "deadbeef",
+    "rounding_rule": "ROUND_HALF_EVEN_4DP",
+    "null_handling": "null_as_zero"
+  },
+  "signature": {
+    "algorithm": "ES256",
+    "public_key_id": "circulr-fixture-2026-05",
+    "public_key_url": "https://fixtures.local/.well-known/verification-keys.json",
+    "value": "6JiEfV9eMUA3H4dFtIr-dnPpdpB8Dw-avKgcLw8BsseQOBr9k-twdVlD4e1Z4zRkWmS-Rbwb3ujXqydzOjMyyw"
+  }
+}
