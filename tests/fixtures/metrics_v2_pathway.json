@@ -1,0 +1,30 @@
+{
+  "programme_id": "prog-fixture-1",
+  "premium_pathway_rate": 0,
+  "net_carbon_impact_kg": 30,
+  "carbon_payback_ratio": 4,
+  "transaction_count": 0,
+  "data_status": "measured",
+  "metrics_source": "precomputed_sorting",
+  "period": null,
+  "outcomes_by_r_strategy": [
+    {
+      "r_strategy": "R5",
+      "loop_type": "reuse",
+      "events": 2,
+      "kg": 18.6
+    },
+    {
+      "r_strategy": "R11",
+      "loop_type": "closed_loop",
+      "events": 3,
+      "kg": 40.5
+    },
+    {
+      "r_strategy": "R11",
+      "loop_type": "open_loop_downcycle",
+      "events": 1,
+      "kg": 12
+    }
+  ]
+}

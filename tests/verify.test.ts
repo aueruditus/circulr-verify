@@ -10,7 +10,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verify } from '../src/verify.js';
+import { manifestMajorVersion, verify } from '../src/verify.js';
 import type { ComputationManifest } from '../src/crypto.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,11 +20,14 @@ const ENDPOINT = 'https://endpoint.test';
 const PROGRAMME_ID = 'prog-fixture-1';
 const TIER1_URL = 'https://fixtures.local/storage/v1/object/public/computation-exports/prog-fixture-1/t1_v3.csv';
 const TIER2_URL = 'https://fixtures.local/storage/v1/object/computation-exports/prog-fixture-1/t2_v3.csv';
+const PATHWAY_URL = 'https://fixtures.local/storage/v1/object/computation-exports/prog-fixture-1/pathway_v3.csv';
 
 interface Fixture {
   manifest: ComputationManifest;
   tier1Csv: string;
   tier2Csv?: string;
+  /** v2.0.0 only — the inputs[1] pathway-classification CSV. */
+  pathwayCsv?: string;
   metrics: Record<string, unknown>;
   publicJwk: unknown;
 }
@@ -34,16 +37,23 @@ let journeysFixture: Fixture;
 let sortingFixture: Fixture;
 let designFixture: Fixture;
 let inputIntegrityFixture: Fixture;
+let v2PathwayFixture: Fixture;
+let v2PathwayMismatchFixture: Fixture;
+let v3EmbeddedFixture: Fixture;
+let v31CanonicalFixture: Fixture;
 
-async function loadFixture(slug: string, hasTier2 = false): Promise<Fixture> {
+async function loadFixture(slug: string, hasTier2 = false, hasPathway = false): Promise<Fixture> {
   const manifest = JSON.parse(await readFile(join(FIXTURES, `manifest_${slug}.json`), 'utf8')) as ComputationManifest;
   const tier1Csv = await readFile(join(FIXTURES, `tier1_${slug}.csv`), 'utf8');
   const tier2Csv = hasTier2
     ? await readFile(join(FIXTURES, `tier2_${slug}.csv`), 'utf8')
     : undefined;
+  const pathwayCsv = hasPathway
+    ? await readFile(join(FIXTURES, `pathway_${slug}.csv`), 'utf8')
+    : undefined;
   const metrics = JSON.parse(await readFile(join(FIXTURES, `metrics_${slug}.json`), 'utf8')) as Record<string, unknown>;
   const keys = JSON.parse(await readFile(join(FIXTURES, 'keys.json'), 'utf8')) as { publicJwk: unknown };
-  return { manifest, tier1Csv, tier2Csv, metrics, publicJwk: keys.publicJwk };
+  return { manifest, tier1Csv, tier2Csv, pathwayCsv, metrics, publicJwk: keys.publicJwk };
 }
 
 beforeAll(async () => {
@@ -51,6 +61,10 @@ beforeAll(async () => {
   journeysFixture = await loadFixture('enhanced_journeys');
   sortingFixture = await loadFixture('precomputed_sorting');
   designFixture = await loadFixture('designtime_estimation');
+  v2PathwayFixture = await loadFixture('v2_pathway', true, true);
+  v2PathwayMismatchFixture = await loadFixture('v2_pathway_mismatch', true, true);
+  v3EmbeddedFixture = await loadFixture('v3_embedded', true);
+  v31CanonicalFixture = await loadFixture('v31_canonical', true);
   // Input integrity reuses the canonical_pipeline tier data with claim_level set.
   const ii = await loadFixture('canonical_pipeline', true);
   const iiManifest = JSON.parse(
@@ -71,6 +85,14 @@ function mockFetcher(opts: {
   serveJwk?: boolean;
   serveMetrics?: boolean;
   tier2RequiredToken?: string;
+  /** Serve the inputs[1] pathway CSV at PATHWAY_URL (RLS, requires token). */
+  servePathway?: boolean;
+  /** Advertise pathway_csv_url in the REST body. Default true. */
+  advertisePathwayUrl?: boolean;
+  /** Override the served pathway CSV bytes (e.g. tampered → hash break). */
+  pathwayOverride?: string;
+  /** Override the served REST `metrics` object (e.g. tampered → metrics_hash break). */
+  metricsOverride?: Record<string, unknown>;
 }) {
   const manifest = opts.manifestOverride === undefined ? opts.fixture.manifest : opts.manifestOverride;
   const tier1 = opts.tier1Override ?? opts.fixture.tier1Csv;
@@ -78,6 +100,8 @@ function mockFetcher(opts: {
   const serveJwk = opts.serveJwk ?? true;
   const serveMetrics = opts.serveMetrics ?? true;
   const tier2RequiredToken = opts.tier2RequiredToken ?? 'fixture-token';
+  const servePathway = opts.servePathway ?? false;
+  const advertisePathwayUrl = opts.advertisePathwayUrl ?? true;
 
   return async function fetcher(url: string | URL, init?: RequestInit): Promise<Response> {
     const u = typeof url === 'string' ? url : url.toString();
@@ -88,10 +112,11 @@ function mockFetcher(opts: {
       const body = {
         programme_id: PROGRAMME_ID,
         published_version: manifest?.published_version ?? 0,
-        metrics: opts.fixture.metrics,
+        metrics: opts.metricsOverride ?? opts.fixture.metrics,
         computation_manifest: manifest,
         tier1_csv_url: TIER1_URL,
         tier2_csv_url: TIER2_URL,
+        ...(advertisePathwayUrl ? { pathway_csv_url: PATHWAY_URL } : {}),
       };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
     }
@@ -118,9 +143,58 @@ function mockFetcher(opts: {
       return new Response(opts.fixture.tier2Csv ?? '', { status: 200, headers: { 'content-type': 'text/csv' } });
     }
 
+    // Pathway CSV (inputs[1] — RLS-restricted, same auth contract as Tier 2).
+    if (u === PATHWAY_URL) {
+      if (!servePathway) return new Response(null, { status: 404 });
+      const auth = (init?.headers as Record<string, string> | undefined)?.['authorization'];
+      if (auth !== `Bearer ${tier2RequiredToken}`) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      return new Response(opts.pathwayOverride ?? opts.fixture.pathwayCsv ?? '', {
+        status: 200,
+        headers: { 'content-type': 'text/csv' },
+      });
+    }
+
     return new Response(null, { status: 404 });
   } as unknown as typeof fetch;
 }
+
+describe('verify — honest per-claim independence (AC20 / D3)', () => {
+  it('a scalar recompute mismatch does NOT suppress the pathway verdict (pathway evaluated independently)', async () => {
+    // Tier 2 with a valid pathway block + CSV, but TAMPERED served metrics on a
+    // RECOMPUTABLE field so a hard scalar failure occurs. The pathway claim is
+    // signature-bound and must still be established + reported (AC20) — never
+    // folded into / gated by the scalar claim. Regression lock for the P7
+    // verify-leg fix (pathway eval moved ABOVE the scalar checks' early-return).
+    //
+    // NOTE: the hard scalar failure now surfaces at `metric_recomputation`, not
+    // `metrics_hash_binding`. Since BUILD_MetricsHash_Embedded_Projection_v0_1,
+    // a <3.0.0 (legacy whole-row) metrics_hash mismatch DEGRADES honestly (AC4)
+    // rather than hard-failing; this fixture is 2.0.0, so the tampered
+    // premium_pathway_rate is caught one check later when recompute disagrees.
+    // The ordering property under test is unchanged: pathway must be computed
+    // before the scalar early-return.
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({
+        fixture: v2PathwayFixture,
+        serveTier2: true,
+        servePathway: true,
+        metricsOverride: { ...v2PathwayFixture.metrics, premium_pathway_rate: 0.123456 },
+      }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('metric_recomputation');
+      // The pathway claim was recomputed + established independently of the scalar failure.
+      expect(result.context.pathway?.status).toBe('verified');
+    }
+  });
+});
 
 describe('verify — happy paths (Aggregation Integrity)', () => {
   it('1. canonical_pipeline Tier 1 verified → Aggregation Integrity', async () => {
@@ -298,6 +372,241 @@ describe('verify — environment isolation & Phase 7c backwards-compat', () => {
     if (result.kind === 'verified') {
       expect(result.claim).toBe('aggregation_integrity');
       expect(result.context.manifest_claim_level).toBe('input_integrity');
+    }
+  });
+});
+
+describe('verify — pathway composite (v2.0.0 / BRIEFING AC1–AC5)', () => {
+  it('AC1. v2 Tier 2 with pathway CSV → scalar VERIFIED + pathway VERIFIED (recompute + L2 projection)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v2PathwayFixture, serveTier2: true, servePathway: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      expect(result.context.pathway?.status).toBe('verified');
+      expect(result.context.pathway?.projection_checked).toBe(true);
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('pathway_input_hash');
+      expect(passed).toContain('pathway_recomputation');
+    }
+  });
+
+  it('AC5. v2 Tier 1 → scalar VERIFIED, pathway NOT_VERIFIABLE_YET (tier1 — does not fail the scalar)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 1,
+      fetcher: mockFetcher({ fixture: v2PathwayFixture }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('aggregation_integrity');
+      expect(result.context.pathway?.status).toBe('not_verifiable_yet');
+      expect(result.context.pathway?.reason).toBe('tier1');
+    }
+  });
+
+  it('AC5b. v2 Tier 2 but endpoint omits pathway_csv_url → scalar VERIFIED, pathway NOT_VERIFIABLE_YET (no_pathway_url)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({
+        fixture: v2PathwayFixture,
+        serveTier2: true,
+        servePathway: true,
+        advertisePathwayUrl: false,
+      }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.context.pathway?.status).toBe('not_verifiable_yet');
+      expect(result.context.pathway?.reason).toBe('no_pathway_url');
+    }
+  });
+
+  it('AC2. v2 Tier 2 with tampered pathway CSV (hash break) → MISMATCH(pathway_input_hash)', async () => {
+    const tampered = v2PathwayFixture.pathwayCsv!.replace('10.5', '999.5');
+    expect(tampered).not.toEqual(v2PathwayFixture.pathwayCsv);
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({
+        fixture: v2PathwayFixture,
+        serveTier2: true,
+        servePathway: true,
+        pathwayOverride: tampered,
+      }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('pathway_input_hash');
+      expect(result.context.pathway?.status).toBe('mismatch');
+    }
+  });
+
+  it('AC1b. Lying producer (signed block disagrees with honest inputs[1]) → MISMATCH(pathway_recomputation)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v2PathwayMismatchFixture, serveTier2: true, servePathway: true }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('pathway_recomputation');
+      expect(result.detail).toMatch(/kg/i);
+    }
+  });
+
+  it('AC4. Archived 1.0.0 manifest (no pathway_outputs block) still VERIFIES; pathway NOT_VERIFIABLE_YET (no_block)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: canonicalFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.context.pathway?.status).toBe('not_verifiable_yet');
+      expect(result.context.pathway?.reason).toBe('no_block');
+    }
+  });
+
+  it('AC3. v2 manifest with tampered signed block → MISMATCH(manifest_signature) before pathway runs', async () => {
+    const tamperedBlock = v2PathwayFixture.manifest.output.pathway_outputs!.map((e, i) =>
+      i === 0 ? { ...e, kg: e.kg + 1 } : e,
+    );
+    const mutated: ComputationManifest = {
+      ...v2PathwayFixture.manifest,
+      output: { ...v2PathwayFixture.manifest.output, pathway_outputs: tamperedBlock },
+    };
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v2PathwayFixture, manifestOverride: mutated, serveTier2: true, servePathway: true }),
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') expect(result.failed_at).toBe('manifest_signature');
+  });
+});
+
+describe('verify — metrics_hash embedded projection (BUILD_MetricsHash_Embedded_Projection_v0_1)', () => {
+  it('V3-1. v3 manifest: metrics_hash_binding verifies from EMBEDDED output.metrics even though the endpoint serves a different body.metrics (self-contained, endpoint-decoupled) [AC3]', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 1,
+      // Endpoint serves the divergent presentation view by default (fixture.metrics).
+      fetcher: mockFetcher({ fixture: v3EmbeddedFixture }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      const binding = result.context.checks.find((c) => c.name === 'metrics_hash_binding');
+      expect(binding?.passed).toBe(true);
+      // The bound (and recompute) source is the embedded projection, not the endpoint shape.
+      expect(result.context.published_metrics?.compliance).toBe('[]'); // embedded string form
+      // Endpoint serialisation diverges → soft presentation-drift note, never a failure.
+      expect(result.context.metrics_presentation_drift_note).toBeTruthy();
+      expect(result.context.metrics_hash_binding_note).toBeUndefined();
+    }
+  });
+
+  it('V3-2. v3 Tier 2 → VERIFIED Input Integrity; metric_recomputation runs against the EMBEDDED projection (not the divergent endpoint view) [AC3]', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      // Endpoint still serves its divergent presentation metrics (fixture.metrics);
+      // the binding + recompute must use the signed embedded output.metrics instead.
+      fetcher: mockFetcher({ fixture: v3EmbeddedFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('metrics_hash_binding');
+      expect(passed).toContain('metric_recomputation');
+      // Bound source is the embedded projection (compliance as the "[]" string),
+      // proving recompute did NOT silently fall back to the endpoint's parsed [].
+      expect(result.context.published_metrics?.compliance).toBe('[]');
+    }
+  });
+
+  it('V3-3. legacy (<3.0.0) whole-row metrics_hash that the endpoint cannot reproduce DEGRADES honestly — VERIFIED with a note, NOT a hard fail [AC4]', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 1,
+      // Add a presentation-only key so hash(endpoint metrics) != metrics_hash, while
+      // keeping the recomputable fields intact so metric_recomputation still passes.
+      fetcher: mockFetcher({
+        fixture: canonicalFixture,
+        metricsOverride: { ...canonicalFixture.metrics, presentation_only_key: 'not-in-preimage' },
+      }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      // Honest degrade: no metrics_hash_binding check pushed, note set instead.
+      expect(result.context.checks.find((c) => c.name === 'metrics_hash_binding')).toBeUndefined();
+      expect(result.context.metrics_hash_binding_note).toBeTruthy();
+      // Signature still verified (no regression on archived manifests).
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('manifest_signature');
+    }
+  });
+
+  it('V3-4. manifestMajorVersion parses the major component (and defaults unparseable → 0 = legacy branch)', async () => {
+    expect(manifestMajorVersion('3.0.0')).toBe(3);
+    expect(manifestMajorVersion('2.0.0')).toBe(2);
+    expect(manifestMajorVersion('10.4.1')).toBe(10);
+    expect(manifestMajorVersion(undefined)).toBe(0);
+    expect(manifestMajorVersion('')).toBe(0);
+    expect(manifestMajorVersion('not-a-version')).toBe(0);
+  });
+});
+
+describe('verify — scalar recompute fidelity (BUILD_Metric_Recompute_Fidelity_v0_1)', () => {
+  it('V31-1. 3.1.0 canonical_pipeline Tier 2: metric_recomputation reproduces the round-then-sum metric EXACTLY (and the old sum-then-round value would have MISMATCHed)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v31CanonicalFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('metrics_hash_binding');
+      expect(passed).toContain('metric_recomputation');
+
+      // The bound net is the v3.1.0 round-then-sum value (per-row 4dp canonicalised).
+      const boundNet = (v31CanonicalFixture.manifest.output.metrics as Record<string, number>).net_carbon_impact_kg;
+      expect(boundNet).toBe(-316.681);
+
+      // The pre-3.1.0 path (sum full precision, then round) would bind a DIFFERENT value,
+      // so a sum-then-round manifest would MISMATCH at metric_recomputation. This is the
+      // regression lock: the discrepancy the fix closes is real and > the 4dp tolerance.
+      const fullAvoided = 34.68411 * 2;
+      const fullGenerated = 193.02464 * 2;
+      const sumThenRound = Math.round((fullAvoided - fullGenerated) * 10000) / 10000;
+      expect(sumThenRound).toBe(-316.6811);
+      expect(sumThenRound).not.toBe(boundNet);
     }
   });
 });
