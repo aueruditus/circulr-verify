@@ -112,6 +112,7 @@ Failure at any step is surfaced as `computation_unverifiable` with a specific su
 - **Whether the published key is the right key.** Key trust is established out of band — the verifier reads `signature.public_key_url` from the manifest. If the manifest points at a malicious key URL serving a key under the same `public_key_id`, the verifier would accept it. Mitigate by pinning the expected key URL via your own tooling, or by running the verifier against multiple environments and comparing.
 - **Whether the transform is correct in the abstract.** The verifier checks that a recompute under the declared transform reproduces the manifest's outputs. If the transform itself contains a bug, the verifier still reports VERIFIED — the manifest is internally consistent.
 - **Whether Tier 1 is a sufficient set of inputs to justify the per-row values.** It is not — Tier 1 is a projection. To verify per-row derivation from raw inputs, run with `--tier 2`.
+- **The per-pathway recovery breakdown.** Not yet bound by the manifest. The producer-side `SPEC_Pathways_Metric_Computation_Manifest` (inbound) will add a per-pathway binding under `manifest_v11` / `TRANSFORM_FUNCTION_VERSION 2.0.0`. Until that ships AND this verifier extends to cover it (a future release), per-pathway claims surface as `not_yet_verifiable`. The scalar metrics (`carbon_payback_ratio`, `net_carbon_impact_kg`, `transaction_count`, the `premium_pathway_rate` scalar) are bound and verifiable today.
 
 ## Architecture
 
@@ -133,7 +134,29 @@ No `@supabase/*`. No `@noble/*`. Pure `fetch()` + Web Crypto.
 
 ## Status
 
-Alpha. Tracks `au.com.auspost.sustainability` v0.4.2 §7. Will progress to v1.0.0 when PROD signing is live across the platform.
+**Stable (v1.0.0, `latest` on npm).** Verifies manifests under `TRANSFORM_FUNCTION_VERSION 1.0.0` and `3.x.x` (archived + embedded-projection shapes, anchored at CirculrDesignerGA commit `b3bfc026`). Tracks `au.com.auspost.sustainability` v0.4.2 §7. Production-proven — used to reproduce the §S6 RMW proof.
+
+### What v1.0.0 includes
+
+Since the alpha (`0.1.0-alpha.2`), the following have shipped:
+
+- **Composite-pathway recompute** (#6) — per-pathway recovery breakdown recomputed from the `programme_pathways` table.
+- **Live-JWKS wrapper** (#8) — accepts the platform's current `{ id, public_key_jwk }` verification-key shape.
+- **Independent pathway verdict** (#9) — pathway claim reported independently of the scalar `metrics_hash` check (AC20 compliance).
+- **Embedded-projection / `function_version` branching** (#10) — verifies `manifest_v3x` embedded-projection manifests in addition to `manifest_v10` archived manifests; branches on `TRANSFORM_FUNCTION_VERSION`.
+- **3.1.0 metric-recomputation fidelity fixtures** (#11) — byte-stable canonical fixtures locking the round-then-sum recompute contract for `function_version 3.1.0`.
+
+### Compatibility matrix
+
+| Manifest version | Verifier coverage |
+|---|---|
+| `manifest_v10` and earlier (`function_version 1.0.0`) | Aggregation Integrity + Input Integrity (with `--tier 2`) |
+| `manifest_v3x` (`function_version 3.x.x`, embedded-projection) | Aggregation Integrity + Input Integrity (with `--tier 2`) |
+| `manifest_v11` (`function_version 2.0.0`, transactions-only, per inbound producer pathways spec) | Scalar metrics: covered by this verifier. Per-pathway recovery breakdown: extension lands in a future major (2.0.0). Until that ships, per-pathway claims surface as `not_yet_verifiable`. |
+
+### Versioning
+
+1.0.0 declares the current API stable. The `manifest_v11` / `function_version 2.0.0` transactions-only work (per the inbound producer `SPEC_Pathways_Metric_Computation_Manifest`) is a future major release (2.0.0). The version string is the maturity signal — `latest` resolves to 1.0.0.
 
 ## License
 

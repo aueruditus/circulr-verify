@@ -8,10 +8,24 @@
 
 import chalk from 'chalk';
 import type { ClaimLevel } from './crypto.js';
-import type { VerifyResult } from './verify.js';
+import type { PathwayVerdict, VerifyResult } from './verify.js';
 
 function claimDisplay(claim: ClaimLevel): string {
   return claim === 'input_integrity' ? 'Input Integrity' : 'Aggregation Integrity';
+}
+
+/** One-line human summary of the separate pathway verdict (AC5). */
+function pathwayLine(p: PathwayVerdict): string {
+  switch (p.status) {
+    case 'verified':
+      return chalk.green('✓ pathway breakdown VERIFIED') +
+        (p.projection_checked ? ' (recompute + L2 projection)' : ' (recompute; no L2 projection)');
+    case 'mismatch':
+      return chalk.red('✗ pathway breakdown MISMATCH');
+    case 'not_verifiable_yet':
+      return chalk.yellow('! pathway breakdown NOT_VERIFIABLE_YET') +
+        (p.reason ? chalk.dim(` (${p.reason})`) : '');
+  }
 }
 
 /**
@@ -52,6 +66,28 @@ export function formatHuman(result: VerifyResult, opts: { verbose: boolean; prog
         if (c.tolerance_dp !== undefined) line += ` (${c.tolerance_dp}dp tolerance)`;
         if (c.tier !== undefined) line += ` (tier=${c.tier})`;
         lines.push(line);
+      }
+
+      // Legacy metrics_hash binding degrade — honest, not a failure (AC4).
+      if (result.context.metrics_hash_binding_note) {
+        lines.push('');
+        lines.push(chalk.yellow('! metrics_hash binding NOT_REPRODUCIBLE (legacy whole-row binding)'));
+        lines.push(chalk.dim(`  ${result.context.metrics_hash_binding_note}`));
+      }
+      // v3.0.0+ self-contained binding verified, but endpoint serialisation drifts.
+      if (result.context.metrics_presentation_drift_note) {
+        lines.push('');
+        lines.push(chalk.yellow('! endpoint metrics presentation drift (soft note)'));
+        lines.push(chalk.dim(`  ${result.context.metrics_presentation_drift_note}`));
+      }
+
+      // Pathway breakdown — reported separately from the scalar claim (AC5).
+      if (result.context.pathway) {
+        lines.push('');
+        lines.push(pathwayLine(result.context.pathway));
+        if (result.context.pathway.status !== 'verified' && result.context.pathway.detail) {
+          lines.push(chalk.dim(`  ${result.context.pathway.detail}`));
+        }
       }
 
       // Manifest-declared vs verifier-established (per AC20).
@@ -100,6 +136,12 @@ export function formatHuman(result: VerifyResult, opts: { verbose: boolean; prog
           lines.push('Recomputed metric values:');
           for (const f of result.context.recomputed.recomputed_fields) {
             lines.push(`  ${f}: ${result.context.recomputed[f]}`);
+          }
+        }
+        if (result.context.pathway_block) {
+          lines.push('Signed pathway_outputs[] block:');
+          for (const e of result.context.pathway_block) {
+            lines.push(`  ${e.r_strategy}/${e.loop_type}: events=${e.events} kg=${e.kg} rate=${e.rate}`);
           }
         }
       }
@@ -188,6 +230,9 @@ export function formatJson(result: VerifyResult, opts: { programmeId: string }):
         })),
         manifest_claim_level: result.context.manifest_claim_level,
         independence_check: result.context.independence_check,
+        pathway: result.context.pathway ?? null,
+        metrics_hash_binding_note: result.context.metrics_hash_binding_note ?? null,
+        metrics_presentation_drift_note: result.context.metrics_presentation_drift_note ?? null,
       };
     }
     case 'mismatch':
@@ -208,6 +253,7 @@ export function formatJson(result: VerifyResult, opts: { programmeId: string }):
           ...(!c.passed ? { detail: c.detail } : {}),
         })),
         manifest_claim_level: result.context.manifest_claim_level,
+        pathway: result.context.pathway ?? null,
       };
     case 'not_verifiable_yet':
       return {

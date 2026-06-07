@@ -36,6 +36,12 @@ export interface ProgrammeMetricsResponse {
   manifest_archive_url?: string;
   tier1_csv_url?: string;
   tier2_csv_url?: string;
+  // v2.0.0 pathway input (inputs[1] — the {id, loop_type, quantity_kg,
+  // r_strategy} projection on enhanced_transactions). RLS-restricted (per-
+  // transaction quantity_kg is participant data), so it is fetched with the
+  // Tier 2 Supabase token. A server that omits it leaves the pathway breakdown
+  // not independently recomputable (the signed block is still signature-bound).
+  pathway_csv_url?: string;
 }
 
 export interface JWKKeyset {
@@ -50,6 +56,8 @@ export interface FetchedManifest {
   /** Resolved storage URL hints, if the endpoint provided them. */
   tier1CsvUrl?: string;
   tier2CsvUrl?: string;
+  /** v2.0.0 pathway-classification input CSV (inputs[1]). RLS-restricted. */
+  pathwayCsvUrl?: string;
 }
 
 /**
@@ -66,6 +74,8 @@ export class FetchError extends Error {
       | 'tier1_not_found'
       | 'tier2_not_found'
       | 'tier2_unauthorized'
+      | 'pathway_not_found'
+      | 'pathway_unauthorized'
       | 'transport',
     message: string,
   ) {
@@ -132,6 +142,7 @@ export async function fetchProgrammeManifest(
           source: 'archive',
           tier1CsvUrl: body.tier1_csv_url,
           tier2CsvUrl: body.tier2_csv_url,
+          pathwayCsvUrl: body.pathway_csv_url,
         };
       }
       // 404 on archive but JSONB present is unusual — proceed with JSONB.
@@ -145,6 +156,7 @@ export async function fetchProgrammeManifest(
     source: 'rest_jsonb',
     tier1CsvUrl: body.tier1_csv_url,
     tier2CsvUrl: body.tier2_csv_url,
+    pathwayCsvUrl: body.pathway_csv_url,
   };
 }
 
@@ -179,14 +191,21 @@ export async function fetchJwk(
     throw new FetchError('transport', `JWK ${publicKeyUrl} returned ${resp.status}`);
   }
   const keyset = (await resp.json()) as JWKKeyset;
-  const key = keyset.keys?.find((k) => k.kid === publicKeyId);
-  if (!key) {
+  // The live verification-keys.{env}.json wraps each key as
+  // { id, status, valid_from, public_key_jwk: { kty, crv, x, y } } and carries
+  // the identifier in `id`; flat-JWK fixtures use a top-level `kid`. Accept both:
+  // match the identifier on kid|id, and unwrap public_key_jwk when present.
+  const entry = keyset.keys?.find(
+    (k) => k.kid === publicKeyId || (k as { id?: string }).id === publicKeyId,
+  );
+  if (!entry) {
     throw new FetchError(
       'jwk_key_id_missing',
       `Key id "${publicKeyId}" absent from key set at ${publicKeyUrl}`,
     );
   }
-  return key;
+  const wrapped = (entry as { public_key_jwk?: ES256JWK }).public_key_jwk;
+  return (wrapped ?? entry) as ES256JWK;
 }
 
 /**
@@ -232,6 +251,38 @@ export async function fetchTier2Csv(
   }
   if (!resp.ok) {
     throw new FetchError('transport', `Tier 2 ${url} returned ${resp.status}`);
+  }
+  return await resp.text();
+}
+
+/**
+ * Fetch the v2.0.0 pathway-classification CSV (inputs[1]) with a programme-
+ * participant Supabase JWT. RLS-restricted, like Tier 2. Returns the raw CSV
+ * text. Distinct error kinds so the orchestrator can degrade the pathway
+ * verdict to not_verifiable_yet rather than fail the whole result.
+ */
+export async function fetchPathwayCsv(
+  url: string,
+  supabaseToken: string,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  const resp = await fetcher(url, {
+    headers: {
+      accept: 'text/csv',
+      authorization: `Bearer ${supabaseToken}`,
+    },
+  });
+  if (resp.status === 401 || resp.status === 403) {
+    throw new FetchError(
+      'pathway_unauthorized',
+      `Pathway CSV ${url} returned ${resp.status} — token does not have programme-participant access`,
+    );
+  }
+  if (resp.status === 404) {
+    throw new FetchError('pathway_not_found', `Pathway CSV not found at ${url}`);
+  }
+  if (!resp.ok) {
+    throw new FetchError('transport', `Pathway ${url} returned ${resp.status}`);
   }
   return await resp.text();
 }
