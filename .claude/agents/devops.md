@@ -15,18 +15,24 @@ surface the conflict to the operator rather than silently choosing.
 
 ## Git workflow — READ FIRST
 
-**Protected branches are PR-only. Direct commits to `main` or `test` are
+**Protected branches are PR-only. Direct pushes to `dev`, `test`, or `main` are
 prohibited (branch protection enforces this).**
 
-| Branch | Role | Promotion path |
-|---|---|---|
-| `dev` | default / integration | feature branches merge here via PR |
-| `test` | promotion / pre-release validation | `dev → test` direct merge is acceptable |
-| `main` | release | `test → main` **always via PR**; branch from `main` only for hotfixes with explicit operator approval |
+`dev` is the **integration trunk AND the release branch** — releases are cut
+from `dev` (see "Release model" below). `test` and `main` are optional
+downstream mirrors, not on the release path.
 
-**Branch from the right base:** feature work from `dev`; promotion to `test`
-from `test`; hotfix from `main` only with operator approval. Stage files **by
-name**, never `git add .`.
+| Branch | Role | Notes |
+|---|---|---|
+| `dev` | trunk + release source | all feature/fix/chore work merges here via PR; releases are tagged here |
+| `test` | optional mirror | synced from `dev` by promotion PR only when desired; not required for a release |
+| `main` | optional mirror | synced from `test` by promotion PR only when desired; hotfix base only with operator approval |
+
+**Branch from the right base:** all work from `dev`; hotfix from `main` only
+with operator approval. Stage files **by name**, never `git add .`. When you do
+run a promotion PR (`dev → test` or `test → main`), resolve any
+`docs/USER_GUIDE.md` add/add conflict in favour of `dev` (the trunk is source
+of truth).
 
 **PR-required change types** (always, regardless of branch): anything under
 `.github/workflows/`, `package.json`/`package-lock.json` version or dependency
@@ -50,11 +56,11 @@ downstream consumers; draft experimental work; doc typo fixes on `dev` only.
    npm test` on every PR and on pushes to `dev`/`test`/`main`. Confirm with
    `gh pr checks`.
 5. **Self-review** via `gh pr diff`.
-6. **STOP. Do not merge.** The merge is ALWAYS the operator's call. Do not run
-   `gh pr merge` and do not enable auto-merge — most importantly on the first PR
-   through any new gate (the operator wants to watch the gate behave). Only if
-   the operator *explicitly* asks you to merge do you run
-   `gh pr merge --auto --squash` (squash keeps `main`/`test` history linear).
+6. **STOP. Do not merge. PR-only is the default.** The merge is ALWAYS the
+   operator's call. Do not run `gh pr merge` and **never enable auto-merge** —
+   most importantly on the first PR through any new gate (the operator wants to
+   watch the gate behave). Only when the operator *explicitly* asks you to merge
+   do you run `gh pr merge --squash` (no `--auto`; squash keeps history linear).
 
 ## Release model — git tag → npm publish
 
@@ -70,8 +76,10 @@ the tests, and publishes with provenance and public access:
 **Release rules:**
 
 - **Never `npm publish` from a local machine.** Cut a release by bumping the
-  version (conventional `chore:` commit, via the PR flow) and then tagging the
-  merged commit on the release branch — the workflow does the publish.
+  version (conventional `chore:` commit, via a PR into `dev`) and then tagging
+  the merged commit on **`dev`** (the release branch) — the workflow does the
+  publish. Mirroring the tag's commit onto `test`/`main` is optional and not
+  part of the release.
 - **The tag's pre-release suffix decides the dist-tag**, so it must match the
   `version` in `package.json`. A `v0.1.0` tag on an `-alpha` version (or vice
   versa) mis-files the release on the registry — verify they agree before
