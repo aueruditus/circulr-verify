@@ -1,0 +1,39 @@
+name: Security
+
+on:
+  push:
+    branches: [dev, test, main]
+  pull_request:
+
+jobs:
+  security:
+    name: Secret scan / dependency audit / action-pin check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0   # full history required for --log-opts="--all" gitleaks
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Secret scan — full history (gitleaks v8.30.1)
+        run: |
+          # Full commit-history scan + working-tree scan.
+          # ghcr.io/gitleaks/gitleaks:v8.30.1 pinned by tag (immutable digest on GHCR).
+          # --redact: no secret value in logs. --config: project rules.
+          docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            detect --source . --log-opts="--all" --config .gitleaks.toml --no-banner --redact -v
+
+      - name: Dependency vulnerability scan (blocking at critical)
+        # Fails on any CRITICAL advisory not allowlisted in .audit-ci.jsonc.
+        # Current allowlist: GHSA-5xrq-8626-4rwp (dev-only vitest advisory).
+        run: npx audit-ci --config .audit-ci.jsonc
+
+      - name: GitHub Actions SHA-pin check (supply-chain)
+        # Fails if any workflow uses a mutable @vN tag or @branch ref.
+        run: bash scripts/check-action-pins.sh

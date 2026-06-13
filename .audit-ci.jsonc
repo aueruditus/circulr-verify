@@ -1,0 +1,21 @@
+{
+  // Secrets/CI substrate rollout — blocking dependency-vulnerability gate (CI Tier-1).
+  // Fails the build on any CRITICAL npm advisory that is NOT explicitly
+  // allowlisted below.
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+
+  // Failure threshold: critical only.
+  "critical": true,
+
+  // Known, risk-accepted advisories. Each entry carries a justification and a
+  // path to removal. Remove the entry when the underlying package is bumped.
+  "allowlist": [
+    // FIXME: dev-only test tooling, no CI/prod exposure; allowlisted pending
+    // vitest bump (GHSA-5xrq-8626-4rwp — vite dev server arbitrary request
+    // forwarding, affects vitest ^2.x dev server only); remove when bumped to
+    // a vitest version that resolves the advisory.
+    "GHSA-5xrq-8626-4rwp"
+  ],
+
+  "report-type": "important"
+}

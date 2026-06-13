@@ -1,0 +1,5 @@
+title = "circulr-verify"
+[extend]
+useDefault = true
+# No additional custom rules required for this repository.
+# (Pusher rule from CDGA omitted — circulr-verify does not use Pusher.)
