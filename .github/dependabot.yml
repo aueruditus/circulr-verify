@@ -1,0 +1,48 @@
+# Dependabot configuration — secrets/CI substrate rollout.
+# Auto-detects vulnerable / outdated dependencies and opens patch PRs.
+version: 2
+updates:
+  # ── JavaScript / npm dependencies ──────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    # Target the dev integration branch — dependency PRs follow the same
+    # dev -> test -> main promotion flow as feature work.
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "aueruditus"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      # Batch patch + minor bumps into a single PR to cut review noise.
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Blanket suppression of ALL npm MAJOR updates. Majors are deliberate,
+    # register-tracked work — not auto-opened. Minor/patch still flow via the
+    # group above.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
+  # Keeps action majors current and feeds SHA-pinning with version signals.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "aueruditus"
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
