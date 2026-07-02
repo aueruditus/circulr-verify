@@ -1,0 +1,3 @@
+calculation_basis,co2e_kg,co2e_type,displacement_rate_applied,emission_factor_id,emission_factor_value,id,loop_type_applied,material_flow_record_id,quantity_kg,quantity_units
+per_item,200,displacement,0.5,ef_disp,21,r1,reuse,m1,0,10
+per_kg,20,processing,,ef2,6.4,r2,reuse,m1,3.1,

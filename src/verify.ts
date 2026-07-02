@@ -25,7 +25,7 @@ import {
   fetchTier1Csv,
   fetchTier2Csv,
 } from './fetch.js';
-import { metricsApproxEqual, recomputeForSource, type RecomputedMetrics } from './recompute.js';
+import { metricsApproxEqual, recomputeForSource, recomputeReuseDisplacement, type RecomputedMetrics } from './recompute.js';
 import {
   comparePathwayBlock,
   compareL2Projection,
@@ -53,7 +53,8 @@ export type CheckName =
   | 'tier2_input_hash'
   | 'metric_recomputation'
   | 'pathway_input_hash'
-  | 'pathway_recomputation';
+  | 'pathway_recomputation'
+  | 'reuse_basis_recomputation';
 
 /**
  * The pathway breakdown verdict — reported SEPARATELY from the scalar metric
@@ -620,6 +621,47 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
     passed: true,
     tolerance_dp: 4,
   });
+
+  // v5.0.0 reuse Input Integrity (SPEC_CirculrVerify_Reuse_Recompute Arm B): when the manifest
+  // binds quantity_units (function_version >= 5) and we verified Tier-2 rows, independently
+  // re-derive each displacement row's co2e (quantity_units × displacement_rate_applied ×
+  // emission_factor_value) and assert it matches the published co2e_kg. This lifts reuse
+  // programmes from Aggregation Integrity (sum trusts per-row co2e) to Input Integrity
+  // (per-row co2e re-derived from physical inputs). Gated on the v5.0.0 projection + presence of
+  // displacement rows; a material or pre-5.0.0 manifest simply has no reuse check (not applicable).
+  const inputColumns = manifest.inputs?.[0]?.columns ?? [];
+  if (
+    tier2Rows != null
+    && manifestMajorVersion(functionVersion) >= 5
+    && inputColumns.includes('quantity_units')
+  ) {
+    const reuse = recomputeReuseDisplacement(tier2Rows);
+    if (reuse.checked > 0) {
+      const m = reuse.mismatches[0];
+      if (m) {
+        const detail =
+          `Reuse displacement row ${m.id}: published co2e_kg (${m.actual}) does not match ` +
+          `quantity_units × displacement_rate_applied × emission_factor_value (${m.expected}) at 4dp — ` +
+          `the reuse carbon cannot be reproduced from the signed Tier 2 inputs under the declared transform.`;
+        checks.push({
+          name: 'reuse_basis_recomputation',
+          passed: false,
+          tolerance_dp: 4,
+          expected: String(m.expected),
+          actual: String(m.actual),
+          detail,
+        });
+        return {
+          kind: 'mismatch',
+          failed_at: 'reuse_basis_recomputation',
+          detail,
+          tier_run: args.tier,
+          context,
+        };
+      }
+      checks.push({ name: 'reuse_basis_recomputation', passed: true, tolerance_dp: 4 });
+    }
+  }
 
   // Step 11: report claim.
   //   --tier 1 → always Aggregation Integrity

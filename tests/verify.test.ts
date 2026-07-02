@@ -43,6 +43,8 @@ let v3EmbeddedFixture: Fixture;
 let v31CanonicalFixture: Fixture;
 let v41DisplacementFixture: Fixture;
 let v31DisplacementFixture: Fixture;
+let v5ReuseFixture: Fixture;
+let v5ReuseTamperedFixture: Fixture;
 
 async function loadFixture(slug: string, hasTier2 = false, hasPathway = false): Promise<Fixture> {
   const manifest = JSON.parse(await readFile(join(FIXTURES, `manifest_${slug}.json`), 'utf8')) as ComputationManifest;
@@ -69,6 +71,8 @@ beforeAll(async () => {
   v31CanonicalFixture = await loadFixture('v31_canonical', true);
   v41DisplacementFixture = await loadFixture('v41_displacement', true);
   v31DisplacementFixture = await loadFixture('v31_displacement', true);
+  v5ReuseFixture = await loadFixture('v5_reuse', true);
+  v5ReuseTamperedFixture = await loadFixture('v5_reuse_tampered', true);
   // Input integrity reuses the canonical_pipeline tier data with claim_level set.
   const ii = await loadFixture('canonical_pipeline', true);
   const iiManifest = JSON.parse(
@@ -651,6 +655,40 @@ describe('verify — displacement net-sign gate (SPEC_CirculrVerify_Reuse_Recomp
       expect(passed).toContain('metric_recomputation');
       const boundNet = (v31DisplacementFixture.manifest.output.metrics as Record<string, number>).net_carbon_impact_kg;
       expect(boundNet).toBe(-115); // avoided 10 − (processing 20 + displacement 105)
+    }
+  });
+});
+
+describe('verify — reuse Input Integrity (SPEC_CirculrVerify_Reuse_Recompute Arm B)', () => {
+  it('V5-1. 5.0.0 reuse Tier 2: displacement co2e re-derived from quantity_units × rate × factor → reuse_basis_recomputation PASSES', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v5ReuseFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      expect(result.claim).toBe('input_integrity');
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      // The displacement row (co2e_kg 105) reproduces from 10 × 0.5 × 21 = 105 → Input Integrity for reuse.
+      expect(passed).toContain('reuse_basis_recomputation');
+    }
+  });
+
+  it('V5-2. tampered reuse: co2e_kg (200) disagrees with quantity_units × rate × factor (105) → MISMATCH(reuse_basis_recomputation)', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v5ReuseTamperedFixture, serveTier2: true }),
+    });
+    // metric_recomputation still passes (net reproduces from the tampered rows); the reuse check bites.
+    expect(result.kind).toBe('mismatch');
+    if (result.kind === 'mismatch') {
+      expect(result.failed_at).toBe('reuse_basis_recomputation');
     }
   });
 });

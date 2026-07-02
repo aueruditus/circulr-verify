@@ -1,0 +1,14 @@
+{
+  "avg_life_extension_months": null,
+  "carbon_payback_ratio": 5.25,
+  "net_carbon_impact_kg": 85,
+  "premium_pathway_rate": 0,
+  "repair_success_rate": null,
+  "transaction_count": 0,
+  "data_status": "measured",
+  "period_start": null,
+  "period_end": null,
+  "compliance": "[]",
+  "emissions_methodology": null,
+  "methodology_scope": null
+}

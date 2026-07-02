@@ -885,6 +885,97 @@ async function buildDisplacementFixture(
   return { manifest, tier1Csv, tier2Csv, metrics: embeddedMetrics };
 }
 
+const TRANSFORM_V5 = {
+  function_id: 'circulr.publish-to-passport.programme-metrics',
+  function_version: '5.0.0',
+  function_url: 'https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/5.0.0/manifest.json',
+  description:
+    'Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. ' +
+    'v5.0.0 binds quantity_units into the canonical_pipeline inputs[0] projection so a verifier reproduces reuse displacement carbon (quantity_units × displacement_rate_applied × emission_factor_value).',
+};
+
+/**
+ * v5.0.0 reuse Input Integrity fixtures (SPEC_CirculrVerify_Reuse_Recompute Arm B). 11-column
+ * canonical_pipeline Tier-2 with a displacement row carrying quantity_units. Honest:
+ * co2e_kg = quantity_units × displacement_rate_applied × emission_factor_value (10 × 0.5 × 21 = 105)
+ * → reuse_basis_recomputation passes → Input Integrity for reuse. Tampered: co2e_kg disagrees
+ * (200 ≠ 105) → reuse_basis_recomputation MISMATCH (proves the check bites). Both credit displacement
+ * in the net (5.0.0 ⇒ major ≥ 4), and metric_recomputation reproduces the net from the rows (so the
+ * tampered fixture fails specifically at reuse_basis_recomputation, not earlier).
+ */
+async function buildReuseFixture(privateJwk: JsonWebKey, kid: string, opts: { tamper: boolean }): Promise<Fixture> {
+  const round4 = (n: number) => Math.round(n * 10000) / 10000;
+  const dispCo2e = opts.tamper ? 200 : 105; // honest 105 = 10 × 0.5 × 21
+  const tier2Rows = [
+    { calculation_basis: 'per_item', co2e_kg: dispCo2e, co2e_type: 'displacement', displacement_rate_applied: 0.5, emission_factor_id: 'ef_disp', emission_factor_value: 21.0, id: 'r1', loop_type_applied: 'reuse', material_flow_record_id: 'm1', quantity_kg: 0, quantity_units: 10 },
+    { calculation_basis: 'per_kg', co2e_kg: 20, co2e_type: 'processing', displacement_rate_applied: null, emission_factor_id: 'ef2', emission_factor_value: 6.4, id: 'r2', loop_type_applied: 'reuse', material_flow_record_id: 'm1', quantity_kg: 3.1, quantity_units: null },
+  ];
+  const tier2Columns = ['calculation_basis', 'co2e_kg', 'co2e_type', 'displacement_rate_applied', 'emission_factor_id', 'emission_factor_value', 'id', 'loop_type_applied', 'material_flow_record_id', 'quantity_kg', 'quantity_units'];
+  const tier2Csv = rowsToCanonicalCsv(tier2Rows, tier2Columns);
+  const tier2Hash = await sha256Hex(tier2Csv);
+  const tier1Rows = tier2Rows.map((r) => ({ co2e_kg: r.co2e_kg, co2e_type: r.co2e_type, id: r.id }));
+  const tier1Csv = rowsToCanonicalCsv(tier1Rows, ['co2e_kg', 'co2e_type', 'id']);
+
+  // 5.0.0 credits displacement (major ≥ 4). net = displacement(credited) − processing.
+  let avoided = 0, generated = 0;
+  for (const r of tier2Rows) {
+    const c = roundHalfEvenLocal(r.co2e_kg, 4);
+    const isBenefit = r.co2e_type === 'avoided' || r.co2e_type === 'displacement';
+    if (isBenefit) avoided += c; else generated += c;
+  }
+  const net = round4(avoided - generated);
+  const ratio = round4(generated > 0 ? avoided / generated : 0);
+
+  const embeddedMetrics = {
+    avg_life_extension_months: null,
+    carbon_payback_ratio: ratio,
+    net_carbon_impact_kg: net,
+    premium_pathway_rate: 0,
+    repair_success_rate: null,
+    transaction_count: 0,
+    data_status: 'measured',
+    period_start: null,
+    period_end: null,
+    compliance: '[]',
+    emissions_methodology: null,
+    methodology_scope: null,
+  };
+  const metricsHash = await sha256Hex(canonicalJsonStringify(embeddedMetrics));
+
+  const body: Omit<ComputationManifest, 'signature'> = {
+    version: '1.0',
+    programme_id: PROGRAMME_ID,
+    canvas_id: CANVAS_ID,
+    published_version: PUBLISHED_VERSION,
+    computed_at: COMPUTED_AT,
+    inputs: [{
+      dataset: 'material_flow_co2e',
+      row_count: tier2Rows.length,
+      hash: tier2Hash,
+      columns: tier2Columns,
+      period_start: null,
+      period_end: null,
+    }],
+    output: {
+      metrics_hash: metricsHash,
+      metrics_source: 'canonical_pipeline',
+      metrics: embeddedMetrics,
+    },
+    computation: {
+      transform: TRANSFORM_V5,
+      emission_factors_hash: 'deadbeef',
+      rounding_rule: 'ROUND_HALF_EVEN_4DP',
+      null_handling: 'null_as_zero',
+    },
+  };
+  const sig = await signManifest(canonicalJsonStringify(body), privateJwk);
+  const manifest: ComputationManifest = {
+    ...body,
+    signature: { algorithm: 'ES256', public_key_id: kid, public_key_url: KEY_URL, value: sig },
+  };
+  return { manifest, tier1Csv, tier2Csv, metrics: embeddedMetrics };
+}
+
 // =============================================================================
 // Entry
 // =============================================================================
@@ -918,6 +1009,8 @@ async function main(): Promise<void> {
   const v31 = await buildV31CanonicalFixture(privateJwk, kid);
   const v41disp = await buildDisplacementFixture(privateJwk, kid, TRANSFORM_V41, true);
   const v31disp = await buildDisplacementFixture(privateJwk, kid, TRANSFORM_V31, false);
+  const v5reuse = await buildReuseFixture(privateJwk, kid, { tamper: false });
+  const v5reuseTampered = await buildReuseFixture(privateJwk, kid, { tamper: true });
 
   const writes: Array<[string, string]> = [
     ['manifest_canonical_pipeline.json', JSON.stringify(canonical.manifest, null, 2)],
@@ -973,6 +1066,16 @@ async function main(): Promise<void> {
     ['tier1_v31_displacement.csv', v31disp.tier1Csv],
     ['tier2_v31_displacement.csv', v31disp.tier2Csv ?? ''],
     ['metrics_v31_displacement.json', JSON.stringify(v31disp.metrics, null, 2)],
+
+    ['manifest_v5_reuse.json', JSON.stringify(v5reuse.manifest, null, 2)],
+    ['tier1_v5_reuse.csv', v5reuse.tier1Csv],
+    ['tier2_v5_reuse.csv', v5reuse.tier2Csv ?? ''],
+    ['metrics_v5_reuse.json', JSON.stringify(v5reuse.metrics, null, 2)],
+
+    ['manifest_v5_reuse_tampered.json', JSON.stringify(v5reuseTampered.manifest, null, 2)],
+    ['tier1_v5_reuse_tampered.csv', v5reuseTampered.tier1Csv],
+    ['tier2_v5_reuse_tampered.csv', v5reuseTampered.tier2Csv ?? ''],
+    ['metrics_v5_reuse_tampered.json', JSON.stringify(v5reuseTampered.metrics, null, 2)],
   ];
 
   for (const [name, body] of writes) {
