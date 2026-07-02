@@ -567,10 +567,15 @@ export async function verify(args: VerifyArgs): Promise<VerifyResult> {
   }
 
   // Recompute the metric-driving values from the verified tier data.
+  // v4.1.0 net-sign gate (SPEC §Fork-3): from function_version 4.x the producer credits
+  // co2e_type='displacement' as an avoided benefit; archived pre-4.x manifests signed it as a
+  // burden, so gate the canonical_pipeline netting on the manifest's own major version.
   const recomputeSourceRows = tier2Rows ?? tier1Rows;
+  const creditDisplacement = manifestMajorVersion(functionVersion) >= 4;
   const recomputed = recomputeForSource(
     manifest.output.metrics_source as MetricsSource,
     recomputeSourceRows,
+    creditDisplacement,
   );
   context.recomputed = recomputed;
 

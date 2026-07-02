@@ -19,7 +19,7 @@
 //   tier2_canonical_pipeline.csv           For Input Integrity test
 //   metrics_*.json                         The published `metrics` row for each manifest
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -789,6 +789,102 @@ async function buildV31CanonicalFixture(privateJwk: JsonWebKey, kid: string): Pr
   return { manifest, tier1Csv, tier2Csv, metrics: embeddedMetrics };
 }
 
+const TRANSFORM_V41 = {
+  function_id: 'circulr.publish-to-passport.programme-metrics',
+  function_version: '4.1.0',
+  function_url: 'https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/4.1.0/manifest.json',
+  description:
+    'Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. ' +
+    'v4.1.0 credits co2e_type=displacement as an avoided benefit in the canonical_pipeline scalar metrics (SPEC §Fork-3).',
+};
+
+/**
+ * Displacement net-sign fixtures (SPEC_CirculrVerify_Reuse_Recompute Arm A). A canonical_pipeline
+ * manifest carrying a co2e_type='displacement' row, netted per the version's signed convention:
+ *   - creditDisplacement=true  (function_version >= 4.1.0): displacement is a benefit → net = (10+105) - 20 = 95
+ *   - creditDisplacement=false (archived pre-4.1.0):         displacement is a burden  → net = 10 - (105+20) = -115
+ * Both must VERIFY GREEN — each reproduces the convention its manifest was signed under. The v3.1.0
+ * (burden) variant is the ARCHIVAL REGRESSION LOCK proving the verifier's version gate (creditDisplacement
+ * = manifestMajorVersion >= 4) does not retroactively break archived displacement manifests.
+ */
+async function buildDisplacementFixture(
+  privateJwk: JsonWebKey,
+  kid: string,
+  transform: typeof TRANSFORM_V41,
+  creditDisplacement: boolean,
+): Promise<Fixture> {
+  const round4 = (n: number) => Math.round(n * 10000) / 10000;
+  const tier2Rows = [
+    { co2e_kg: 10, co2e_type: 'avoided', emission_factor_id: 'ef1', emission_factor_value: 1.15, id: 'r1', material_flow_record_id: 'm1', quantity_kg: 8.7 },
+    { co2e_kg: 105, co2e_type: 'displacement', emission_factor_id: 'ef3', emission_factor_value: 21.0, id: 'r2', material_flow_record_id: 'm2', quantity_kg: 0 },
+    { co2e_kg: 20, co2e_type: 'processing', emission_factor_id: 'ef2', emission_factor_value: 6.4, id: 'r3', material_flow_record_id: 'm1', quantity_kg: 3.1 },
+  ];
+  const tier2Columns = ['co2e_kg', 'co2e_type', 'emission_factor_id', 'emission_factor_value', 'id', 'material_flow_record_id', 'quantity_kg'];
+  const tier2Csv = rowsToCanonicalCsv(tier2Rows, tier2Columns);
+  const tier2Hash = await sha256Hex(tier2Csv);
+  const tier1Rows = tier2Rows.map((r) => ({ co2e_kg: r.co2e_kg, co2e_type: r.co2e_type, id: r.id }));
+  const tier1Csv = rowsToCanonicalCsv(tier1Rows, ['co2e_kg', 'co2e_type', 'id']);
+
+  // Net per the signed convention: displacement credited (benefit) iff creditDisplacement.
+  let avoided = 0, generated = 0;
+  for (const r of tier2Rows) {
+    const c = roundHalfEvenLocal(r.co2e_kg, 4);
+    const isBenefit = r.co2e_type === 'avoided' || (creditDisplacement && r.co2e_type === 'displacement');
+    if (isBenefit) avoided += c; else generated += c;
+  }
+  const net = round4(avoided - generated);
+  const ratio = round4(generated > 0 ? avoided / generated : 0);
+
+  const embeddedMetrics = {
+    avg_life_extension_months: null,
+    carbon_payback_ratio: ratio,
+    net_carbon_impact_kg: net,
+    premium_pathway_rate: 0,
+    repair_success_rate: null,
+    transaction_count: 0,
+    data_status: 'measured',
+    period_start: null,
+    period_end: null,
+    compliance: '[]',
+    emissions_methodology: null,
+    methodology_scope: null,
+  };
+  const metricsHash = await sha256Hex(canonicalJsonStringify(embeddedMetrics));
+
+  const body: Omit<ComputationManifest, 'signature'> = {
+    version: '1.0',
+    programme_id: PROGRAMME_ID,
+    canvas_id: CANVAS_ID,
+    published_version: PUBLISHED_VERSION,
+    computed_at: COMPUTED_AT,
+    inputs: [{
+      dataset: 'material_flow_co2e',
+      row_count: tier2Rows.length,
+      hash: tier2Hash,
+      columns: tier2Columns,
+      period_start: null,
+      period_end: null,
+    }],
+    output: {
+      metrics_hash: metricsHash,
+      metrics_source: 'canonical_pipeline',
+      metrics: embeddedMetrics,
+    },
+    computation: {
+      transform,
+      emission_factors_hash: 'deadbeef',
+      rounding_rule: 'ROUND_HALF_EVEN_4DP',
+      null_handling: 'null_as_zero',
+    },
+  };
+  const sig = await signManifest(canonicalJsonStringify(body), privateJwk);
+  const manifest: ComputationManifest = {
+    ...body,
+    signature: { algorithm: 'ES256', public_key_id: kid, public_key_url: KEY_URL, value: sig },
+  };
+  return { manifest, tier1Csv, tier2Csv, metrics: embeddedMetrics };
+}
+
 // =============================================================================
 // Entry
 // =============================================================================
@@ -797,8 +893,19 @@ async function main(): Promise<void> {
   const outDir = __dirname;
   await mkdir(outDir, { recursive: true });
 
-  const { privateJwk, publicJwk, kid } = await generateKeypair();
-  await writeFile(join(outDir, 'keys.json'), JSON.stringify({ privateJwk, publicJwk, kid, key_url: KEY_URL }, null, 2));
+  // Reuse the committed keypair if present, so adding a fixture doesn't re-key and churn every
+  // existing manifest's signature. Only mint a fresh keypair on first run (no keys.json yet).
+  let privateJwk: JsonWebKey;
+  let publicJwk: JsonWebKey;
+  let kid: string;
+  const keysPath = join(outDir, 'keys.json');
+  try {
+    const existing = JSON.parse(await readFile(keysPath, 'utf8')) as { privateJwk: JsonWebKey; publicJwk: JsonWebKey; kid: string };
+    ({ privateJwk, publicJwk, kid } = existing);
+  } catch {
+    ({ privateJwk, publicJwk, kid } = await generateKeypair());
+    await writeFile(keysPath, JSON.stringify({ privateJwk, publicJwk, kid, key_url: KEY_URL }, null, 2));
+  }
 
   const canonical = await buildCanonicalPipelineFixture(privateJwk, kid);
   const journeys = await buildEnhancedJourneysFixture(privateJwk, kid);
@@ -809,6 +916,8 @@ async function main(): Promise<void> {
   const v2Mismatch = await buildV2PathwayMismatchFixture(privateJwk, kid);
   const v3 = await buildV3EmbeddedMetricsFixture(privateJwk, kid);
   const v31 = await buildV31CanonicalFixture(privateJwk, kid);
+  const v41disp = await buildDisplacementFixture(privateJwk, kid, TRANSFORM_V41, true);
+  const v31disp = await buildDisplacementFixture(privateJwk, kid, TRANSFORM_V31, false);
 
   const writes: Array<[string, string]> = [
     ['manifest_canonical_pipeline.json', JSON.stringify(canonical.manifest, null, 2)],
@@ -854,6 +963,16 @@ async function main(): Promise<void> {
     ['tier1_v31_canonical.csv', v31.tier1Csv],
     ['tier2_v31_canonical.csv', v31.tier2Csv ?? ''],
     ['metrics_v31_canonical.json', JSON.stringify(v31.metrics, null, 2)],
+
+    ['manifest_v41_displacement.json', JSON.stringify(v41disp.manifest, null, 2)],
+    ['tier1_v41_displacement.csv', v41disp.tier1Csv],
+    ['tier2_v41_displacement.csv', v41disp.tier2Csv ?? ''],
+    ['metrics_v41_displacement.json', JSON.stringify(v41disp.metrics, null, 2)],
+
+    ['manifest_v31_displacement.json', JSON.stringify(v31disp.manifest, null, 2)],
+    ['tier1_v31_displacement.csv', v31disp.tier1Csv],
+    ['tier2_v31_displacement.csv', v31disp.tier2Csv ?? ''],
+    ['metrics_v31_displacement.json', JSON.stringify(v31disp.metrics, null, 2)],
   ];
 
   for (const [name, body] of writes) {

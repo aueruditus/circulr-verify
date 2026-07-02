@@ -41,6 +41,8 @@ let v2PathwayFixture: Fixture;
 let v2PathwayMismatchFixture: Fixture;
 let v3EmbeddedFixture: Fixture;
 let v31CanonicalFixture: Fixture;
+let v41DisplacementFixture: Fixture;
+let v31DisplacementFixture: Fixture;
 
 async function loadFixture(slug: string, hasTier2 = false, hasPathway = false): Promise<Fixture> {
   const manifest = JSON.parse(await readFile(join(FIXTURES, `manifest_${slug}.json`), 'utf8')) as ComputationManifest;
@@ -65,6 +67,8 @@ beforeAll(async () => {
   v2PathwayMismatchFixture = await loadFixture('v2_pathway_mismatch', true, true);
   v3EmbeddedFixture = await loadFixture('v3_embedded', true);
   v31CanonicalFixture = await loadFixture('v31_canonical', true);
+  v41DisplacementFixture = await loadFixture('v41_displacement', true);
+  v31DisplacementFixture = await loadFixture('v31_displacement', true);
   // Input integrity reuses the canonical_pipeline tier data with claim_level set.
   const ii = await loadFixture('canonical_pipeline', true);
   const iiManifest = JSON.parse(
@@ -607,6 +611,46 @@ describe('verify — scalar recompute fidelity (BUILD_Metric_Recompute_Fidelity_
       const sumThenRound = Math.round((fullAvoided - fullGenerated) * 10000) / 10000;
       expect(sumThenRound).toBe(-316.6811);
       expect(sumThenRound).not.toBe(boundNet);
+    }
+  });
+});
+
+describe('verify — displacement net-sign gate (SPEC_CirculrVerify_Reuse_Recompute Arm A)', () => {
+  it('V41-1. 4.1.0 canonical_pipeline with a displacement row: displacement CREDITED as a benefit → verifies GREEN', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v41DisplacementFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      expect(passed).toContain('metric_recomputation');
+      // 4.1.0 credits displacement: net = (avoided 10 + displacement 105) − processing 20 = 95.
+      const boundNet = (v41DisplacementFixture.manifest.output.metrics as Record<string, number>).net_carbon_impact_kg;
+      expect(boundNet).toBe(95);
+    }
+  });
+
+  it('V31-DISP. ARCHIVAL REGRESSION LOCK: an archived 3.1.0 manifest with a displacement row (signed with displacement as a BURDEN) still verifies GREEN under the version gate', async () => {
+    const result = await verify({
+      endpoint: ENDPOINT,
+      programmeId: PROGRAMME_ID,
+      tier: 2,
+      supabaseToken: 'fixture-token',
+      fetcher: mockFetcher({ fixture: v31DisplacementFixture, serveTier2: true }),
+    });
+    expect(result.kind).toBe('verified');
+    if (result.kind === 'verified') {
+      const passed = result.context.checks.filter((c) => c.passed).map((c) => c.name);
+      // The gate (creditDisplacement = manifestMajorVersion >= 4) is FALSE for 3.1.0, so the verifier
+      // reproduces the burden convention the manifest was signed under → metric_recomputation passes.
+      // Without the gate, crediting displacement would false-MISMATCH this archived manifest.
+      expect(passed).toContain('metric_recomputation');
+      const boundNet = (v31DisplacementFixture.manifest.output.metrics as Record<string, number>).net_carbon_impact_kg;
+      expect(boundNet).toBe(-115); // avoided 10 − (processing 20 + displacement 105)
     }
   });
 });
