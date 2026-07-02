@@ -1,0 +1,4 @@
+co2e_kg,co2e_type,emission_factor_id,emission_factor_value,id,material_flow_record_id,quantity_kg
+10,avoided,ef1,1.15,r1,m1,8.7
+105,displacement,ef3,21,r2,m2,0
+20,processing,ef2,6.4,r3,m1,3.1

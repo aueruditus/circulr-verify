@@ -63,18 +63,31 @@ function num(v: unknown): number {
  * Tier 1 columns: ['co2e_kg', 'co2e_type', 'id']
  * Source paths: index.ts:519-540.
  *
- *   totalAvoided   = sum(co2e_kg where co2e_type === 'avoided')
- *   totalGenerated = sum(co2e_kg where co2e_type !== 'avoided')
+ *   totalAvoided   = sum(co2e_kg where co2e_type is a benefit)
+ *   totalGenerated = sum(co2e_kg where co2e_type is a burden)
  *   net_carbon_impact_kg = totalAvoided - totalGenerated
  *   carbon_payback_ratio = totalGenerated > 0 ? totalAvoided / totalGenerated : 0
  *   premium_pathway_rate = 0 (canonical_pipeline doesn't set premium rate)
+ *
+ * Benefit set is VERSION-GATED (mirrors the producer's transform identity):
+ *   - function_version < 4 (≤ 4.0.0): benefit = {avoided}; displacement is a burden.
+ *   - function_version >= 4.1.0 (creditDisplacement=true): benefit = {avoided, displacement}.
+ *     SPEC_LCA_Composition_Fallback_v190 §Fork-3 — reuse displacement IS avoided CO₂e. The CDGA
+ *     producer credited it from 4.1.0 (publish-to-passport canonicalPipelineMetrics.ts). Archived
+ *     pre-4.1.0 manifests were SIGNED with displacement as a burden, so they MUST reproduce that way
+ *     — hence the gate (caller passes creditDisplacement = manifestMajorVersion >= 4). Default false
+ *     is archival-safe (unknown/old version → burden).
  */
-export function recomputeCanonicalPipeline(rows: Array<Record<string, unknown>>): RecomputedMetrics {
+export function recomputeCanonicalPipeline(
+  rows: Array<Record<string, unknown>>,
+  creditDisplacement = false,
+): RecomputedMetrics {
   let totalAvoided = 0;
   let totalGenerated = 0;
   for (const row of rows) {
     const co2e = num(row.co2e_kg);
-    if (row.co2e_type === 'avoided') totalAvoided += co2e;
+    const isBenefit = row.co2e_type === 'avoided' || (creditDisplacement && row.co2e_type === 'displacement');
+    if (isBenefit) totalAvoided += co2e;
     else totalGenerated += co2e;
   }
   const netCarbonImpact = totalAvoided - totalGenerated;
@@ -213,10 +226,11 @@ export function recomputeDesigntimeEstimation(rows: Array<Record<string, unknown
 export function recomputeForSource(
   source: MetricsSource,
   rows: Array<Record<string, unknown>>,
+  creditDisplacement = false,
 ): RecomputedMetrics {
   switch (source) {
     case 'canonical_pipeline':
-      return recomputeCanonicalPipeline(rows);
+      return recomputeCanonicalPipeline(rows, creditDisplacement);
     case 'enhanced_journeys':
       return recomputeEnhancedJourneys(rows);
     case 'precomputed_sorting':
