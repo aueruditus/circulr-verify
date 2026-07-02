@@ -6,7 +6,7 @@
 // while archived pre-4.x manifests reproduce with displacement as a burden (the signed convention).
 
 import { describe, it, expect } from 'vitest';
-import { recomputeCanonicalPipeline, recomputeForSource } from '../src/recompute.js';
+import { recomputeCanonicalPipeline, recomputeForSource, recomputeReuseDisplacement } from '../src/recompute.js';
 
 const REUSE_ROWS = [
   { co2e_type: 'avoided', co2e_kg: 10 },
@@ -54,5 +54,31 @@ describe('recomputeForSource — threads the gate to canonical_pipeline', () => 
   it('does not credit displacement when the flag is false', () => {
     const m = recomputeForSource('canonical_pipeline', REUSE_ROWS, false);
     expect(m.net_carbon_impact_kg).toBe(-115);
+  });
+});
+
+describe('recomputeReuseDisplacement — reuse Input Integrity (Arm B)', () => {
+  it('passes when co2e_kg = quantity_units × displacement_rate_applied × emission_factor_value', () => {
+    const r = recomputeReuseDisplacement([
+      { id: 'r1', co2e_type: 'displacement', co2e_kg: 105, quantity_units: 10, displacement_rate_applied: 0.5, emission_factor_value: 21 },
+      { id: 'r2', co2e_type: 'processing', co2e_kg: 20 }, // skipped (not displacement)
+    ]);
+    expect(r.checked).toBe(1);
+    expect(r.mismatches).toHaveLength(0);
+  });
+
+  it('flags a mismatch when the published co2e_kg disagrees with the re-derived value', () => {
+    const r = recomputeReuseDisplacement([
+      { id: 'r1', co2e_type: 'displacement', co2e_kg: 200, quantity_units: 10, displacement_rate_applied: 0.5, emission_factor_value: 21 },
+    ]);
+    expect(r.checked).toBe(1);
+    expect(r.mismatches).toHaveLength(1);
+    expect(r.mismatches[0]).toMatchObject({ id: 'r1', expected: 105, actual: 200 });
+  });
+
+  it('checks nothing for a material-only row set (no displacement rows)', () => {
+    const r = recomputeReuseDisplacement([{ id: 'r1', co2e_type: 'processing', co2e_kg: 20 }]);
+    expect(r.checked).toBe(0);
+    expect(r.mismatches).toHaveLength(0);
   });
 });

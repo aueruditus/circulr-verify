@@ -248,3 +248,34 @@ export function recomputeForSource(
 export function metricsApproxEqual(a: number, b: number): boolean {
   return Math.abs(a - b) < 0.00005;
 }
+
+/**
+ * Reuse Input Integrity (SPEC_CirculrVerify_Reuse_Recompute Arm B). For each displacement row,
+ * independently re-derive the per-item co2e from the bound Tier-2 inputs and compare to the
+ * published co2e_kg:
+ *
+ *   expected co2e_kg = quantity_units × displacement_rate_applied × emission_factor_value
+ *
+ * Mirrors the producer's computeDisplacementRecord (`items × rate × effectiveFactor`, off the mass
+ * path). Requires the v5.0.0 Tier-2 projection (quantity_units bound) — the caller gates presence.
+ * Only `co2e_type='displacement'` rows carry the per-item basis; material rows are skipped.
+ */
+export interface ReuseBasisResult {
+  checked: number;
+  mismatches: Array<{ id: string; expected: number; actual: number }>;
+}
+
+export function recomputeReuseDisplacement(rows: Array<Record<string, unknown>>): ReuseBasisResult {
+  const mismatches: Array<{ id: string; expected: number; actual: number }> = [];
+  let checked = 0;
+  for (const row of rows) {
+    if (row.co2e_type !== 'displacement') continue;
+    checked++;
+    const expected = round4(num(row.quantity_units) * num(row.displacement_rate_applied) * num(row.emission_factor_value));
+    const actual = round4(num(row.co2e_kg));
+    if (!metricsApproxEqual(expected, actual)) {
+      mismatches.push({ id: String(row.id ?? ''), expected, actual });
+    }
+  }
+  return { checked, mismatches };
+}

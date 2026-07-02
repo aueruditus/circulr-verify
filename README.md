@@ -154,13 +154,16 @@ Since the alpha (`0.1.0-alpha.2`), the following have shipped:
 | `manifest_v3x` (`function_version 3.x.x`, embedded-projection) | Aggregation Integrity + Input Integrity (with `--tier 2`) |
 | `function_version 4.0.0` (reuse-basis columns bound into the canonical_pipeline Tier-2 projection) | Aggregation Integrity + Input Integrity. The 3 reuse-basis columns hash-verify via the manifest's `inputs[0].columns`; scalar recompute unchanged from 3.x. |
 | `function_version 4.1.0` (displacement net-sign) | Aggregation Integrity + Input Integrity. The canonical_pipeline scalar recompute **credits `co2e_type='displacement'` as an avoided benefit** (matching the producer's §Fork-3 change). Version-gated on `function_version >= 4`. |
+| `function_version 5.0.0` (quantity_units bound) | Aggregation Integrity + Input Integrity, **including reuse**: with `quantity_units` bound into Tier-2, the verifier independently re-derives each displacement row's co2e (`quantity_units × displacement_rate_applied × emission_factor_value`) and asserts it matches the published `co2e_kg` (`reuse_basis_recomputation`). Gated on `function_version >= 5` + `quantity_units` present. |
 | `manifest_v11` (`function_version 2.0.0`, transactions-only, per inbound producer pathways spec) | Scalar metrics: covered by this verifier. Per-pathway recovery breakdown: extension lands in a future major (2.0.0). Until that ships, per-pathway claims surface as `not_yet_verifiable`. |
 
 **Displacement net-sign convention (version-gated, archival-faithful):** for `function_version < 4` the canonical_pipeline net treats `co2e_type='displacement'` as a burden (the convention those manifests were signed under); for `function_version >= 4.1.0` it credits displacement as an avoided benefit. Archived pre-4.1.0 manifests therefore keep verifying under their own signed convention — the gate never retroactively flips their net.
 
 ### Versioning
 
-1.1.0 adds the `function_version 4.x` displacement net-sign gate (SPEC §Fork-3): the canonical_pipeline scalar recompute credits displacement as a benefit for 4.1.0+ manifests, version-gated so archived manifests stay reproducible. Additive + backward-compatible. **Reuse Input Integrity** — independently re-deriving reuse displacement carbon (`quantity_units × displacement_rate × per-item factor`) from the Tier-2 input — is the next major (2.0.0), gated on the producer binding `quantity_units` into the Tier-2 projection. The version string is the maturity signal.
+1.1.0 added the `function_version 4.x` displacement net-sign gate (SPEC §Fork-3): the canonical_pipeline scalar recompute credits displacement as a benefit for 4.1.0+ manifests, version-gated so archived manifests stay reproducible.
+
+2.0.0 adds **Reuse Input Integrity**: for `function_version >= 5` manifests carrying `quantity_units`, the verifier independently re-derives each displacement row's co2e (`quantity_units × displacement_rate_applied × emission_factor_value`) from the signed Tier-2 input and asserts it matches the published `co2e_kg` (the `reuse_basis_recomputation` check). This lifts reuse programmes from Aggregation Integrity (the sum trusts per-row co2e) to Input Integrity (per-row co2e re-derived from physical inputs). A tampered co2e that doesn't match its inputs fails `reuse_basis_recomputation`. Material / pre-5.0.0 manifests are unaffected (no reuse check — not applicable). The version string is the maturity signal.
 
 ## License
 

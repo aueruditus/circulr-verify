@@ -1,0 +1,64 @@
+{
+  "version": "1.0",
+  "programme_id": "prog-fixture-1",
+  "canvas_id": "canvas-fixture-1",
+  "published_version": 3,
+  "computed_at": "2026-05-04T08:42:11.000Z",
+  "inputs": [
+    {
+      "dataset": "material_flow_co2e",
+      "row_count": 2,
+      "hash": "008cc32b2e642b8af3d24a684e6b4b53bf3e623942f28df61758a5303d2e65a4",
+      "columns": [
+        "calculation_basis",
+        "co2e_kg",
+        "co2e_type",
+        "displacement_rate_applied",
+        "emission_factor_id",
+        "emission_factor_value",
+        "id",
+        "loop_type_applied",
+        "material_flow_record_id",
+        "quantity_kg",
+        "quantity_units"
+      ],
+      "period_start": null,
+      "period_end": null
+    }
+  ],
+  "output": {
+    "metrics_hash": "aa78e138e5eea1e97eaf541cf7ec0cb0c474f9b59a9aa341ea3232d9f0719eab",
+    "metrics_source": "canonical_pipeline",
+    "metrics": {
+      "avg_life_extension_months": null,
+      "carbon_payback_ratio": 5.25,
+      "net_carbon_impact_kg": 85,
+      "premium_pathway_rate": 0,
+      "repair_success_rate": null,
+      "transaction_count": 0,
+      "data_status": "measured",
+      "period_start": null,
+      "period_end": null,
+      "compliance": "[]",
+      "emissions_methodology": null,
+      "methodology_scope": null
+    }
+  },
+  "computation": {
+    "transform": {
+      "function_id": "circulr.publish-to-passport.programme-metrics",
+      "function_version": "5.0.0",
+      "function_url": "https://circulrdesigner.circulr.ai/transforms/circulr.publish-to-passport.programme-metrics/5.0.0/manifest.json",
+      "description": "Programme metrics computation pipeline for au.com.auspost.sustainability §7-conformant manifests. v5.0.0 binds quantity_units into the canonical_pipeline inputs[0] projection so a verifier reproduces reuse displacement carbon (quantity_units × displacement_rate_applied × emission_factor_value)."
+    },
+    "emission_factors_hash": "deadbeef",
+    "rounding_rule": "ROUND_HALF_EVEN_4DP",
+    "null_handling": "null_as_zero"
+  },
+  "signature": {
+    "algorithm": "ES256",
+    "public_key_id": "circulr-fixture-2026-05",
+    "public_key_url": "https://fixtures.local/.well-known/verification-keys.json",
+    "value": "WHVGE_BwAVnsV7nMbgUq2OE27XnY_KQapMJHJsV1JoLq6hN5tHY6zO319-GU1B-WpqqALFL4YysP1_L0nycgcg"
+  }
+}
